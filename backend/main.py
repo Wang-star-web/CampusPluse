@@ -169,3 +169,60 @@ app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
 @app.get("/")
 def index():
     return FileResponse(FRONTEND / "index.html")
+
+
+# ---------- A00 阶段01：多对象现场数据链（在 Day1 内容之上追加，不改动既有代码） ----------
+from fastapi import WebSocket, WebSocketDisconnect
+
+from . import mqtt_bridge, ws_hub
+from .state import store
+
+
+@app.on_event("startup")
+def startup_stage01_mqtt():
+    mqtt_bridge.start()
+
+
+@app.on_event("shutdown")
+def shutdown_stage01_mqtt():
+    mqtt_bridge.stop()
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+def current_payload() -> dict:
+    """当前全部对象的最新状态。与 WebSocket 快照共用，保证页面与接口一致。
+
+    对象值全部来自 MQTT 实时消息（store），绝不写死；尚未收到任何消息时 objects 为空。
+    """
+    objects = store.snapshot()
+    observed = [o["observed_at"] for o in objects.values()]
+    return {
+        "activity_id": mqtt_bridge.ACTIVITY_ID,
+        "objects": objects,
+        "updated_at": max(observed) if observed else None,
+    }
+
+
+@app.get("/api/current")
+def api_current():
+    return current_payload()
+
+
+@app.websocket("/ws")
+async def ws_endpoint(ws: WebSocket):
+    await ws.accept()
+    # 先推全量快照再注册；注册前到达的更新会漏掉，
+    # 但模拟器每 2s 全量刷新一次，最迟下个周期自然补齐（有界自愈）。
+    await ws.send_text(ws_hub.build_snapshot_message(current_payload()))
+    ws_hub.register(ws)
+    try:
+        while True:
+            await ws.receive_text()  # 客户端不发业务消息，仅作保活与断开检测
+    except WebSocketDisconnect:
+        pass
+    finally:
+        ws_hub.unregister(ws)

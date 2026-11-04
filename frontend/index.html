@@ -3,103 +3,103 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CampusPulse · 校园活动脉搏</title>
+<title>CampusPulse · 校园开放日</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family:"PingFang SC","Microsoft YaHei",sans-serif; background:#0f1419; color:#e6e8eb; padding:24px; }
-  h1 { font-size:22px; margin-bottom:4px; }
+  .head { display:flex; align-items:center; gap:12px; margin-bottom:4px; flex-wrap:wrap; }
+  h1 { font-size:22px; }
+  .badge { font-size:12px; color:#8b949e; border:1px solid #30363d; border-radius:999px; padding:2px 10px; font-family:Consolas,monospace; }
   .sub { color:#8b949e; font-size:13px; margin-bottom:20px; }
-  .banner { border-radius:12px; padding:20px 24px; margin-bottom:20px; border:1px solid #30363d; }
-  .banner.normal { background:#12261a; border-color:#238636; }
-  .banner.elevated { background:#2e2a12; border-color:#d29922; }
-  .banner.blocked { background:#33181b; border-color:#f85149; }
-  .banner .lv { font-size:24px; font-weight:700; }
-  .banner .fc { margin-top:8px; font-size:13px; color:#c9d1d9; line-height:1.8; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
-  .card { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:14px; }
+  .status { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#8b949e; margin-left:auto; }
+  .status i { width:8px; height:8px; border-radius:50%; display:inline-block; background:#6e7681; }
+  .status.connected i { background:#58a6ff; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+  .card { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:16px; }
   .card h3 { font-size:14px; color:#58a6ff; margin-bottom:10px; }
-  .row { display:flex; justify-content:space-between; font-size:13px; padding:5px 0; border-bottom:1px dashed #21262d; }
-  .row:last-child { border-bottom:0; }
-  .tag { font-size:11px; padding:1px 8px; border-radius:999px; }
-  .t-ok { background:#1a3a24; color:#3fb950; }
-  .t-warn { background:#3d2b1f; color:#d29922; }
-  .t-bad { background:#402327; color:#f85149; }
-  .t-unk { background:#2b2f36; color:#8b949e; }
-  .bar { height:8px; background:#21262d; border-radius:99px; overflow:hidden; margin-top:6px; }
-  .bar i { display:block; height:100%; background:#1f6feb; }
-  .whatif { margin-top:20px; background:#161b22; border:1px solid #30363d; border-radius:10px; padding:14px; font-size:13px; }
-  .whatif label { margin-right:14px; cursor:pointer; }
-  button { background:#1f6feb; color:#fff; border:0; border-radius:8px; padding:8px 16px; cursor:pointer; font-size:13px; margin-top:10px; }
-  .runs { margin-top:20px; font-size:12px; color:#8b949e; }
-  .runs div { padding:5px 0; border-bottom:1px dashed #30363d; }
+  .value { font-size:32px; font-weight:700; }
+  .unit { font-size:12px; color:#6e7681; margin-top:2px; }
+  .meta { margin-top:10px; font-size:12px; color:#8b949e; line-height:1.8; font-family:Consolas,monospace; }
+  .card.flash { animation:flash .6s; }
+  @keyframes flash { 0% { border-color:#58a6ff; } 100% { border-color:#30363d; } }
+  .footer { margin-top:20px; font-size:12px; color:#8b949e; border-top:1px dashed #21262d; padding-top:12px; }
 </style>
 </head>
 <body>
-  <h1>CampusPulse · 校园活动脉搏</h1>
-  <div class="sub" id="sub"></div>
-
-  <div class="banner normal" id="banner">
-    <div class="lv" id="lv">—</div>
-    <div class="fc" id="fc"></div>
+  <div class="head">
+    <h1>CampusPulse · 校园开放日</h1>
+    <span class="badge" id="activity">activity_id: —</span>
+    <span class="status" id="conn"><i></i><span id="conn-text">连接中…</span></span>
   </div>
+  <div class="sub">A00 阶段01 最小看板 · 只展示数据源原始数值（本阶段不做态势计算）</div>
 
   <div class="grid">
-    <div class="card"><h3>人流</h3><div id="crowd"></div></div>
-    <div class="card"><h3>入口</h3><div id="entrances"></div></div>
-    <div class="card"><h3>支持资源</h3><div id="staff"></div></div>
-    <div class="card"><h3>天气</h3><div id="weather"></div></div>
+    <div class="card" id="card-crowd"><h3>人群数量 crowd</h3><div class="value" id="v-crowd">—</div><div class="unit">人</div><div class="meta" id="m-crowd"></div></div>
+    <div class="card" id="card-entrance"><h3>入口 entrance</h3><div class="value" id="v-entrance">—</div><div class="unit">开放数 / 总数</div><div class="meta" id="m-entrance"></div></div>
+    <div class="card" id="card-main_route"><h3>主要路线 main_route</h3><div class="value" id="v-main_route">—</div><div class="unit">状态</div><div class="meta" id="m-main_route"></div></div>
+    <div class="card" id="card-support"><h3>支持人员 support</h3><div class="value" id="v-support">—</div><div class="unit">人</div><div class="meta" id="m-support"></div></div>
   </div>
 
-  <div class="whatif">
-    <b>条件推演（不改变现状，只重新计算）</b><br><br>
-    <label><input type="checkbox" id="w-rain"> 强降雨</label>
-    <label><input type="checkbox" id="w-e2"> 入口2恢复通行</label>
-    人数 <input type="number" id="w-crowd" value="900" style="width:70px">
-    <button onclick="runWhatif()">推演</button>
-    <div id="whatif-out" style="margin-top:10px;color:#c9d1d9"></div>
-  </div>
-
-  <button onclick="newRun()">生成一次态势判断（run_id）</button>
-  <div class="runs" id="runs"></div>
+  <div class="footer">数据状态：持续更新 · 来源：SIMULATED（模拟数据）</div>
 
 <script>
-const LV = { normal:['整体正常','normal'], elevated:['态势偏高','elevated'], blocked:['存在受阻','blocked'] };
-async function load() {
-  const d = await fetch('/api/overview').then(r=>r.json());
-  const s = d.scene, sit = d.situation;
-  document.getElementById('sub').textContent = `${s.event_name} · 计算于 ${sit.computed_at.slice(11,19)}`;
-  const [txt, cls] = LV[sit.level];
-  const b = document.getElementById('banner');
-  b.className = 'banner ' + cls;
-  document.getElementById('lv').textContent = txt;
-  document.getElementById('fc').innerHTML = sit.factors.map(f=>'· '+f).join('<br>');
+const OBJECTS = ['crowd', 'entrance', 'main_route', 'support'];
+// 只把原始业务值渲染成文本，不做任何比较/换算/着色（本阶段不引入态势语义）
+const valueText = {
+  crowd: d => String(d.count),
+  entrance: d => `${d.available} / ${d.total}`,
+  main_route: d => String(d.status),
+  support: d => String(d.count),
+};
+const metaText = env => `observed_at: ${(env.observed_at || '').slice(11, 19)} · source_type: ${env.source_type}`;
 
-  const util = Math.round(sit.util*100);
-  document.getElementById('crowd').innerHTML =
-    `<div class="row"><span>当前人数</span><b>${s.crowd} / ${s.capacity}</b></div>
-     <div class="bar"><i style="width:${util}%"></i></div>
-     <div class="row" style="margin-top:6px"><span>利用率</span><b>${util}%</b></div>`;
-  document.getElementById('entrances').innerHTML = s.entrances.map(e =>
-    `<div class="row"><span>${e.name}</span><span class="tag ${e.status==='normal'?'t-ok':'t-bad'}">${e.status==='normal'?'通行正常':'拥堵'}</span></div>`).join('');
-  document.getElementById('staff').innerHTML =
-    `<div class="row"><span>支持人员</span><b>${s.staff.available}/${s.staff.total} 可用</b></div>` +
-    s.support_points.map(p => `<div class="row"><span>${p.name}</span><span class="tag ${p.status==='ok'?'t-ok':'t-unk'}">${p.status==='ok'?'正常':'未知'}</span></div>`).join('');
-  document.getElementById('weather').innerHTML = `<div class="row"><span>${s.weather.text}</span></div>`;
+function renderObject(objectType, envelope) {
+  const v = document.getElementById('v-' + objectType);
+  const m = document.getElementById('m-' + objectType);
+  const txt = valueText[objectType](envelope.data);
+  if (v.textContent !== txt) {
+    v.textContent = txt;
+    const card = document.getElementById('card-' + objectType);
+    card.classList.remove('flash'); void card.offsetWidth; card.classList.add('flash');
+  }
+  m.textContent = metaText(envelope);
+}
 
-  const runs = await fetch('/api/runs').then(r=>r.json());
-  document.getElementById('runs').innerHTML = '<b>最近运行</b>' + runs.map(r=>`<div>${r.run_id} ｜ ${r.level} ｜ ${r.summary||''}</div>`).join('');
+function renderSnapshot(payload) {
+  document.getElementById('activity').textContent = 'activity_id: ' + payload.activity_id;
+  const seen = new Set(Object.keys(payload.objects || {}));
+  for (const [ot, env] of Object.entries(payload.objects || {})) renderObject(ot, env);
+  for (const ot of OBJECTS) if (!seen.has(ot)) { // 尚未收到数据的对象保持占位
+    document.getElementById('v-' + ot).textContent = '—';
+    document.getElementById('m-' + ot).textContent = '等待数据';
+  }
 }
-async function runWhatif() {
-  const rain = document.getElementById('w-rain').checked ? 1 : 0;
-  const e2ok = document.getElementById('w-e2').checked;
-  const crowd = document.getElementById('w-crowd').value;
-  const url = `/api/whatif?rain=${rain}&crowd=${crowd}${e2ok?'&e2=normal':''}`;
-  const d = await fetch(url).then(r=>r.json());
-  const [txt] = LV[d.situation.level];
-  document.getElementById('whatif-out').innerHTML = `<b>推演结果：${txt}</b><br>` + d.situation.factors.map(f=>'· '+f).join('<br>');
+
+function setConn(state, text) {
+  const el = document.getElementById('conn');
+  el.className = 'status' + (state === 'connected' ? ' connected' : '');
+  document.getElementById('conn-text').textContent = text;
 }
-async function newRun(){ await fetch('/api/runs',{method:'POST'}); load(); }
-load();
+
+let retryDelay = 1;
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => { retryDelay = 1; setConn('connected', '已连接'); };
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (msg.type === 'snapshot') renderSnapshot(msg.payload);
+    else if (msg.type === 'update' && OBJECTS.includes(msg.object_type)) renderObject(msg.object_type, msg.envelope);
+  };
+  ws.onclose = () => {
+    setConn('disconnected', `已断开，${retryDelay}s 后重连…`);
+    setTimeout(connect, retryDelay * 1000);
+    retryDelay = Math.min(retryDelay * 2, 8); // 指数退避，封顶 8s
+  };
+  ws.onerror = () => { ws.close(); };
+}
+connect();
 </script>
 </body>
 </html>
