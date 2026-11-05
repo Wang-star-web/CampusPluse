@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CampusPulse · 校园开放日</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230f1419'/%3E%3Cpath d='M4 16h6l3-7 6 14 3-7h6' stroke='%2358a6ff' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family:"PingFang SC","Microsoft YaHei",sans-serif; background:#0f1419; color:#e6e8eb; padding:24px; }
@@ -23,6 +24,7 @@
   .card.flash { animation:flash .6s; }
   @keyframes flash { 0% { border-color:#58a6ff; } 100% { border-color:#30363d; } }
   .footer { margin-top:20px; font-size:12px; color:#8b949e; border-top:1px dashed #21262d; padding-top:12px; }
+  .hint { margin-bottom:20px; font-size:13px; color:#8b949e; background:#161b22; border:1px dashed #30363d; border-radius:10px; padding:10px 14px; }
 </style>
 </head>
 <body>
@@ -32,6 +34,7 @@
     <span class="status" id="conn"><i></i><span id="conn-text">连接中…</span></span>
   </div>
   <div class="sub">A00 阶段01 最小看板 · 只展示数据源原始数值（本阶段不做态势计算）</div>
+  <div class="hint" id="hint" hidden>暂无对象数据 —— 请确认 MQTT broker（mosquitto）与 4 个模拟器已启动</div>
 
   <div class="grid">
     <div class="card" id="card-crowd"><h3>人群数量 crowd</h3><div class="value" id="v-crowd">—</div><div class="unit">人</div><div class="meta" id="m-crowd"></div></div>
@@ -68,6 +71,8 @@ function renderObject(objectType, envelope) {
 function renderSnapshot(payload) {
   document.getElementById('activity').textContent = 'activity_id: ' + payload.activity_id;
   const seen = new Set(Object.keys(payload.objects || {}));
+  // 无对象数据时提示检查数据源进程（不做态势语义，仅运行提示）
+  document.getElementById('hint').hidden = seen.size > 0;
   for (const [ot, env] of Object.entries(payload.objects || {})) renderObject(ot, env);
   for (const ot of OBJECTS) if (!seen.has(ot)) { // 尚未收到数据的对象保持占位
     document.getElementById('v-' + ot).textContent = '—';
