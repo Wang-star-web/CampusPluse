@@ -37,3 +37,16 @@ def envelope_to_dict(env: ObservationEnvelope) -> dict:
         "source_type": env.source_type,
         "data": env.data,
     }
+
+
+class SimConfig(BaseModel):
+    """模拟器配置（POST /api/sim/set 请求体）。
+
+    4 个字段全部必填（无默认值）：打错字段名（如 entrance）会 422 而不是被静默忽略。
+    取值集合是阶段01表格的超集：support=12 无预设按钮，但仍可经 API 设置。
+    """
+
+    crowd: Literal[300, 500, 650, 750, 900]
+    entrance_available: Literal[1, 2]
+    main_route: Literal["normal", "limited"]
+    support: Literal[8, 10, 12]

@@ -2,14 +2,16 @@
 
 约定：
 - 模拟器只发布原始业务状态（source_type=SIMULATED），绝不输出任何态势结论；
-- 每个发布周期热读 sim_values.json，改文件即生效、无需重启模拟器；
+- 配置唯一入口是后端内存（经 POST /api/sim/set 修改），模拟器每个发布周期
+  轮询 GET /api/sim/config 拉取配置；后端不可达时沿用上次有效配置并告警，
+  冷启动未拉到配置前不发布任何消息；
 - 与 backend/mqtt_bridge.py 中的 ACTIVITY_ID / topic 约定需保持一致。
 """
 
 import json
 import time
+import urllib.request
 from datetime import datetime, timezone
-from pathlib import Path
 
 import paho.mqtt.client as mqtt
 
@@ -17,24 +19,22 @@ ACTIVITY_ID = "campus_open_day_01"
 MQTT_HOST = "127.0.0.1"
 MQTT_PORT = 1883
 PUBLISH_INTERVAL_S = 2.0
-SIM_VALUES_PATH = Path(__file__).resolve().parent / "sim_values.json"
 
-# 可取值集合（与阶段01表格一致）；超出集合的文件值会被拒绝并沿用上次有效值
-ALLOWED = {
-    "crowd": {300, 500, 650, 750, 900},
-    "entrance": {"2/2", "1/2"},
-    "main_route": {"normal", "limited"},
-    "support": {8, 10, 12},
-}
+# 与 README 中 uvicorn 端口一致；模拟器进程不共享后端内存，只能经 HTTP 轮询
+CONFIG_URL = "http://127.0.0.1:8000/api/sim/config"
+CONFIG_KEYS = ("crowd", "entrance_available", "main_route", "support")
+FETCH_TIMEOUT_S = 1.0
 
 
-def load_sim_values() -> dict | None:
-    """热读 sim_values.json；文件不存在/损坏/非对象时返回 None。"""
+def fetch_config() -> dict | None:
+    """轮询后端内存配置；超时/后端未启动/响应异常一律返回 None（调用方沿用上次配置）。"""
     try:
-        raw = json.loads(SIM_VALUES_PATH.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+        with urllib.request.urlopen(CONFIG_URL, timeout=FETCH_TIMEOUT_S) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        # 模拟器绝不能因配置拉取失败而退出（URLError/JSONDecodeError 等全兜住）
         return None
-    if not isinstance(raw, dict):
+    if not isinstance(raw, dict) or any(k not in raw for k in CONFIG_KEYS):
         return None
     return raw
 
@@ -50,11 +50,12 @@ def build_envelope(object_type: str, data: dict, observed_at: str | None = None)
     }
 
 
-def run_simulator(object_type: str, key: str, to_data) -> None:
-    """发布循环：热读配置 → 校验 → 构建信封 → MQTT publish（qos=0, retain=False）。
+def run_simulator(object_type: str, to_data) -> None:
+    """发布循环：轮询后端配置 → to_data(cfg) → 信封 → MQTT publish（qos=0, retain=False）。
 
-    to_data(value) -> dict | None：把文件中的原始值转换为 data 字段；
-    返回 None 表示转换失败，跳过本次发布并沿用上次有效值。
+    to_data(cfg: dict) -> dict | None：把整份配置转换为 data 字段。
+    冷启动在首次成功拉到配置前不发布任何消息；运行中后端不可达则沿用上次配置继续发布。
+    配置值的合法性由后端 pydantic（Literal）保证，模拟器只做键存在性防御。
     """
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
@@ -65,19 +66,21 @@ def run_simulator(object_type: str, key: str, to_data) -> None:
     client.loop_start()
     topic = f"campuspulse/{ACTIVITY_ID}/state/{object_type}"
     last_data: dict | None = None
+    cfg_unreachable = False  # 仅在状态切换时告警，避免每 2s 刷屏
     print(f"[{object_type}] simulator started: topic={topic}, interval={PUBLISH_INTERVAL_S}s (Ctrl+C to stop)")
     try:
         while True:
-            values = load_sim_values()
-            if values is None:
-                print(f"[{object_type}] WARN sim_values.json missing/invalid, keeping last value")
-            elif key not in values:
-                print(f"[{object_type}] WARN key {key!r} missing in sim_values.json, keeping last value")
-            elif values[key] not in ALLOWED[key]:
-                allowed = sorted(ALLOWED[key], key=str)
-                print(f"[{object_type}] WARN value {values[key]!r} not allowed (allowed: {allowed}), keeping last value")
+            cfg = fetch_config()
+            if cfg is None:
+                if not cfg_unreachable:
+                    note = "not publishing until first successful fetch" if last_data is None else "keeping last config"
+                    print(f"[{object_type}] WARN backend config unreachable, {note}")
+                    cfg_unreachable = True
             else:
-                data = to_data(values[key])
+                if cfg_unreachable:
+                    print(f"[{object_type}] backend config recovered: {cfg}")
+                cfg_unreachable = False
+                data = to_data(cfg)
                 if data is not None:
                     last_data = data
             if last_data is not None:

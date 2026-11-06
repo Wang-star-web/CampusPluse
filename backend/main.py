@@ -226,3 +226,25 @@ async def ws_endpoint(ws: WebSocket):
         pass
     finally:
         ws_hub.unregister(ws)
+
+
+# ---------- A00 阶段01增量：模拟配置 API（按钮/curl → 内存配置 → 模拟器轮询） ----------
+from .schemas import SimConfig
+from .state import sim_config
+
+
+@app.get("/api/sim/config")
+def sim_get_config():
+    """模拟器每 2s 轮询此接口拉取配置（模拟器进程不共享后端内存）。"""
+    return sim_config.get()
+
+
+@app.post("/api/sim/set")
+def sim_set_config(cfg: SimConfig):
+    """更新内存配置并立即返回新配置。
+
+    刻意不直接发 MQTT：页面变化必须走 模拟器轮询 → MQTT → 后端 store → WS 链路，
+    保证"页面变化必然来自数据源变化"这一验收点不被旁路（延迟典型 ≤3s）。
+    """
+    sim_config.set(cfg.model_dump())
+    return sim_config.get()

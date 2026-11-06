@@ -9,12 +9,16 @@ run_id、SQLite。所有数据来自模拟器经 MQTT 推送的实时状态（`s
 ## 架构
 
 ```
-simulators/*_sim.py                     backend/
-（每 2s 热读 sim_values.json）           mqtt_bridge.py（paho 订阅线程）
-   │ publish (qos=0, retain=False)        │ 通配订阅 campuspulse/+/state/+
-   ▼                                      ▼ JSON 信封校验 + activity_id 过滤
-Mosquitto 127.0.0.1:1883 ──────────▶ state.py（内存最新状态）──┬─▶ GET /api/current
-   topic: campuspulse/campus_open_day_01/state/*                └─▶ ws_hub.py ─▶ /ws ─▶ 浏览器看板
+浏览器看板 / curl / FastAPI /docs
+   │ POST /api/sim/set（改模拟配置；纯内存，重启回默认）
+   ▼
+backend: sim_config 内存配置 ◀──GET /api/sim/config（每 2s 轮询）── 4 个模拟器
+                                    │ publish (qos=0, retain=False)
+   ┌────────────────────────────────▼
+   │ Mosquitto 127.0.0.1:1883（topic: campuspulse/campus_open_day_01/state/*）
+   ▼
+backend: mqtt_bridge（通配订阅+信封校验）→ state.py store ──┬─▶ GET /api/current
+                                                             └─▶ ws_hub → /ws → 浏览器看板
 ```
 
 统一消息外壳（每条 MQTT 消息）：
@@ -60,31 +64,49 @@ py simulators\main_route_sim.py
 py simulators\support_sim.py
 ```
 
+> 模拟器冷启动后先轮询后端配置，拉取成功才开始发布（后端未启动时不会发消息）。
+
 **④ 打开看板**
 
 浏览器访问 http://127.0.0.1:8000/ ，看到 4 张卡片实时数值与"已连接"状态。
 
-## 修改数据源，页面自动刷新
+## 修改数据源（三种等价方式）
 
-模拟器每个发布周期（2s）热读一次 `simulators\sim_values.json`，**改文件即生效，无需重启模拟器**：
+配置唯一入口是后端内存（`POST /api/sim/set`），模拟器每 2s 轮询一次；改完 ≤3s 页面自动更新，无需重启任何进程。
 
-| 对象 | 文件键 | 可取值 |
-|---|---|---|
-| 人群数量 crowd | `"crowd"` | 300 / 500 / 650 / 750 / 900 |
-| 入口 entrance | `"entrance"` | `"2/2"` / `"1/2"`（开放数/总数） |
-| 主要路线 main_route | `"main_route"` | `"normal"` / `"limited"` |
-| 支持人员 support | `"support"` | 8 / 10 / 12 |
+**方式一：页面预设按钮**（看板顶部【300】【500】【650】【750】【900】）
 
-演示：把 `"crowd": 500` 改为 `650` 并保存 → 看板人数卡片 ≤2s 自动变为 650，无需刷新页面。
+| 预设 | crowd | entrance_available | main_route | support |
+|---|---|---|---|---|
+| 300 | 300 | 2 | normal | 10 |
+| 500 | 500 | 2 | normal | 10 |
+| 650 | 650 | 2 | normal | 10 |
+| 750 | 750 | 1 | normal | 8 |
+| 900 | 900 | 1 | limited | 8 |
 
-恢复默认值：`git checkout -- simulators\sim_values.json`
+**方式二：FastAPI /docs 在线调试**
+
+打开 http://127.0.0.1:8000/docs → 找到 `POST /api/sim/set` → Try it out → 填入请求体执行。
+（各字段可取值直接列在 schema 里；非法值返回 422。）
+
+**方式三：curl**
+
+```
+curl -X POST http://127.0.0.1:8000/api/sim/set -H "Content-Type: application/json" -d "{\"crowd\":900,\"entrance_available\":1,\"main_route\":\"limited\",\"support\":8}"
+```
+
+可取值：crowd ∈ {300,500,650,750,900}；entrance_available ∈ {1,2}；main_route ∈ {normal,limited}；support ∈ {8,10,12}（support=12 无预设按钮，但 API 合法）。
+
+查看当前配置：`GET /api/sim/config`。
 
 ## 接口
 
 - `GET /health` → `{"status":"ok"}`
 - `GET /api/current` → 当前全部对象最新状态（全部来自 MQTT 实时消息，非写死；结构：
-  `{activity_id, objects: {crowd/entrance/route/support: 信封}, updated_at}`）
+  `{activity_id, objects: {crowd/entrance/main_route/support: 信封}, updated_at}`）
 - `WS /ws` → 连接即推全量快照，之后每个对象更新推增量
+- `GET /api/sim/config` → 当前模拟器配置（模拟器每 2s 轮询此接口）
+- `POST /api/sim/set` → 更新模拟器配置（body 见上表；非法值 422）
 
 ## 关闭与重启复现
 
@@ -94,6 +116,8 @@ py simulators\support_sim.py
 4. 再按上面"启动步骤"依次重新启动，看板恢复实时更新。
 
 模拟器 `retain=False` + 后端纯内存态：重启后状态从 MQTT 实时消息重新建立，不依赖上次运行残留。
+注意：**后端重启后模拟配置回到默认（500 预设：crowd=500、entrance_available=2、normal、support=10）**，
+模拟器会在一个轮询周期（2s）内自动跟随——这是内存态设计，不是 bug。
 
 ## 端口排查
 
@@ -104,11 +128,11 @@ py simulators\support_sim.py
 
 | 验收点 | 做法 |
 |---|---|
-| 页面变化必须来自数据源变化 | 改 `sim_values.json`，看板 ≤2s 自动变化、无手动刷新 |
+| 页面变化必须来自数据源变化 | 点预设按钮/调 `/api/sim/set`，看板 ≤3s 自动变化、无手动刷新；卡片只由 WebSocket 消息渲染 |
 | `/api/current` 非写死 | 用 mosquitto_pub 手工发布 `data.count=777`，接口与页面立即显示 777 |
 | 统一消息外壳 | 每条消息含 activity_id/object_type/observed_at/source_type/data，全部属于 campus_open_day_01 |
-| 模拟器只输出原始状态 | simulators 代码只做取值映射与发布，无阈值/标签/结论逻辑 |
-| 关闭重启可复现 | 按上文"关闭与重启复现"步骤 |
+| 模拟器只输出原始状态 | 模拟器只做配置→data 映射与发布，无阈值/标签/结论逻辑；配置校验由后端 Literal 承担 |
+| 关闭重启可复现 | 按上文"关闭与重启复现"步骤（配置回 500 默认属预期） |
 
 ## 开发约定
 

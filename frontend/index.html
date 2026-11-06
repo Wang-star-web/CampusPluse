@@ -25,6 +25,12 @@
   @keyframes flash { 0% { border-color:#58a6ff; } 100% { border-color:#30363d; } }
   .footer { margin-top:20px; font-size:12px; color:#8b949e; border-top:1px dashed #21262d; padding-top:12px; }
   .hint { margin-bottom:20px; font-size:13px; color:#8b949e; background:#161b22; border:1px dashed #30363d; border-radius:10px; padding:10px 14px; }
+  .toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
+  .toolbar label { font-size:13px; color:#8b949e; margin-right:4px; }
+  .preset { background:#161b22; color:#e6e8eb; border:1px solid #30363d; border-radius:8px; padding:6px 14px; cursor:pointer; font-size:13px; }
+  .preset:hover { border-color:#58a6ff; }
+  .preset.active { border-color:#58a6ff; color:#58a6ff; }
+  #preset-status { font-size:12px; color:#8b949e; }
 </style>
 </head>
 <body>
@@ -34,6 +40,15 @@
     <span class="status" id="conn"><i></i><span id="conn-text">连接中…</span></span>
   </div>
   <div class="sub">A00 阶段01 最小看板 · 只展示数据源原始数值（本阶段不做态势计算）</div>
+  <div class="toolbar">
+    <label>场景预设（改数据源配置）</label>
+    <button class="preset" data-crowd="300">300</button>
+    <button class="preset" data-crowd="500">500</button>
+    <button class="preset" data-crowd="650">650</button>
+    <button class="preset" data-crowd="750">750</button>
+    <button class="preset" data-crowd="900">900</button>
+    <span id="preset-status"></span>
+  </div>
   <div class="hint" id="hint" hidden>暂无对象数据 —— 请确认 MQTT broker（mosquitto）与 4 个模拟器已启动</div>
 
   <div class="grid">
@@ -66,6 +81,7 @@ function renderObject(objectType, envelope) {
     card.classList.remove('flash'); void card.offsetWidth; card.classList.add('flash');
   }
   m.textContent = metaText(envelope);
+  if (objectType === 'crowd') syncPreset(envelope.data.count);
 }
 
 function renderSnapshot(payload) {
@@ -85,6 +101,38 @@ function setConn(state, text) {
   el.className = 'status' + (state === 'connected' ? ' connected' : '');
   document.getElementById('conn-text').textContent = text;
 }
+
+// 预设参数包：按钮只调用 POST /api/sim/set 改后端配置，绝不直接写卡片数值
+// （卡片只由 WebSocket 消息渲染，保证"页面变化必然来自数据源变化"）
+const PRESETS = {
+  300: {crowd:300, entrance_available:2, main_route:'normal', support:10},
+  500: {crowd:500, entrance_available:2, main_route:'normal', support:10},
+  650: {crowd:650, entrance_available:2, main_route:'normal', support:10},
+  750: {crowd:750, entrance_available:1, main_route:'normal', support:8},
+  900: {crowd:900, entrance_available:1, main_route:'limited', support:8},
+};
+// 只按人群原始值相等比较来高亮按钮：纯展示状态，不是态势判断，不产生任何业务值
+function syncPreset(crowdCount) {
+  document.querySelectorAll('.preset').forEach(b =>
+    b.classList.toggle('active', Number(b.dataset.crowd) === crowdCount));
+}
+document.querySelectorAll('.preset').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const st = document.getElementById('preset-status');
+    try {
+      const res = await fetch('/api/sim/set', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(PRESETS[btn.dataset.crowd]),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      st.textContent = '已下发配置，等待数据源更新…';
+      syncPreset(Number(btn.dataset.crowd));
+    } catch (e) {
+      st.textContent = '下发失败（后端未连接？）';
+    }
+  });
+});
 
 let retryDelay = 1;
 function connect() {

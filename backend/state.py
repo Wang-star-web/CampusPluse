@@ -39,3 +39,34 @@ class StateStore:
 
 
 store = StateStore()  # 模块级单例：mqtt_bridge 写入，main.py 读取
+
+
+class SimConfigStore:
+    """模拟器全局配置的内存存储（A00 阶段01增量）。
+
+    与 StateStore 同理：进程内存即事实，重启回到默认值（无残留）。
+    POST /api/sim/set 在线程池线程写入，GET /api/sim/config 被模拟器
+    每 2s 并发轮询 → 同样加锁 + 深拷贝。
+    """
+
+    DEFAULTS: dict = {
+        "crowd": 500,              # 默认即 500 预设（按钮中位场景）
+        "entrance_available": 2,
+        "main_route": "normal",
+        "support": 10,
+    }
+
+    def __init__(self) -> None:
+        self._config = dict(self.DEFAULTS)
+        self._lock = threading.Lock()
+
+    def get(self) -> dict:
+        with self._lock:
+            return copy.deepcopy(self._config)
+
+    def set(self, config: dict) -> None:
+        with self._lock:
+            self._config = dict(config)
+
+
+sim_config = SimConfigStore()  # 模块级单例：main.py 读写；模拟器经 HTTP 间接读取
