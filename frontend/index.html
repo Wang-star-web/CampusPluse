@@ -25,6 +25,22 @@
   @keyframes flash { 0% { border-color:#58a6ff; } 100% { border-color:#30363d; } }
   .footer { margin-top:20px; font-size:12px; color:#8b949e; border-top:1px dashed #21262d; padding-top:12px; }
   .hint { margin-bottom:20px; font-size:13px; color:#8b949e; background:#161b22; border:1px dashed #30363d; border-radius:10px; padding:10px 14px; }
+  .sit-section { margin-bottom:24px; background:#161b22; border:1px solid #30363d; border-radius:10px; padding:18px 20px; }
+  .sit-section h2 { font-size:16px; margin-bottom:10px; }
+  .sit-run { font-size:12px; color:#8b949e; font-family:Consolas,monospace; margin-bottom:10px; }
+  .sit-summary { font-size:22px; font-weight:700; margin-bottom:12px; }
+  .sit-main { font-size:13px; }
+  .sit-impact { border-left:3px solid #d29922; background:#1c1a14; border-radius:6px; padding:8px 12px; margin-bottom:8px; cursor:pointer; }
+  .sit-impact .msg { color:#e6e8eb; }
+  .sit-impact .detail { display:none; margin-top:6px; font-size:12px; color:#8b949e; font-family:Consolas,monospace; line-height:1.8; }
+  .sit-impact.open .detail { display:block; }
+  .sit-none { color:#8b949e; font-size:13px; }
+  .evlink { color:#58a6ff; cursor:pointer; text-decoration:underline; }
+  .b-complete { color:#3fb950; }
+  .b-partial { color:#d29922; }
+  #trace-panel { margin-top:10px; font-size:12px; color:#8b949e; font-family:Consolas,monospace; line-height:1.8; }
+  #btn-run { background:#1f6feb; color:#fff; border:0; border-radius:8px; padding:8px 16px; cursor:pointer; font-size:13px; margin-top:12px; }
+  #run-status { margin-left:10px; font-size:12px; color:#8b949e; }
   .toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
   .toolbar label { font-size:13px; color:#8b949e; margin-right:4px; }
   .preset { background:#161b22; color:#e6e8eb; border:1px solid #30363d; border-radius:8px; padding:6px 14px; cursor:pointer; font-size:13px; }
@@ -50,7 +66,17 @@
     <span class="badge" id="activity">activity_id: —</span>
     <span class="status" id="conn"><i></i><span id="conn-text">连接中…</span></span>
   </div>
-  <div class="sub">A00 阶段02 · 原始数据 + 证据追踪（本阶段不做态势计算）</div>
+  <div class="sub">A00 阶段04 · 整体态势 + 原始数据 + 证据追踪（态势由 Python 规则计算，LLM 不参与判定）</div>
+  <div class="sit-section">
+    <h2>视图一 · 整体态势</h2>
+    <div class="sit-run">run_id: <span id="sit-run-id">—</span> · <span id="sit-time"></span> · 完整性: <span id="sit-completeness">—</span></div>
+    <div class="sit-summary" id="sit-summary">尚未生成运行记录</div>
+    <div class="sit-main" id="sit-main"></div>
+    <div id="sit-unknown" hidden></div>
+    <div id="trace-panel"></div>
+    <button id="btn-run">执行现实运行（生成新 run_id）</button>
+    <span id="run-status"></span>
+  </div>
   <div class="toolbar">
     <label>场景预设（改数据源配置）</label>
     <button class="preset" data-crowd="300">300</button>
@@ -91,6 +117,10 @@
 
 <script>
 const OBJECTS = ['crowd', 'entrance', 'main_route', 'support'];
+// impact_type -> object_type（视图一追溯：影响 → 证据引用）
+const IMPACT_OBJ = {capacity:'crowd', entrance:'entrance', support:'support', route:'main_route'};
+let latestStates = null;   // 最近一次 WS 快照的原始状态（供"执行现实运行"取输入）
+let latestEvidence = {};   // 每对象最新证据（供取证据引用）
 // 只把原始业务值渲染成文本，不做任何比较/换算/着色（本阶段不引入态势语义）
 const valueText = {
   crowd: d => String(d.count),
@@ -118,6 +148,16 @@ function renderSnapshot(payload) {
   const seen = new Set(Object.keys(payload.objects || {}));
   // 无对象数据时提示检查数据源进程（不做态势语义，仅运行提示）
   document.getElementById('hint').hidden = seen.size > 0;
+  // 记录原始状态供"执行现实运行"取输入（只在四对象齐备时更新）
+  const objs = payload.objects || {};
+  if (['crowd','entrance','main_route','support'].every(ot => objs[ot])) {
+    latestStates = {
+      crowd: objs.crowd.data.count,
+      entrance: {available: objs.entrance.data.available},
+      main_route: objs.main_route.data.status,
+      support: objs.support.data.count,
+    };
+  }
   for (const [ot, env] of Object.entries(payload.objects || {})) renderObject(ot, env);
   for (const ot of OBJECTS) if (!seen.has(ot)) { // 尚未收到数据的对象保持占位
     document.getElementById('v-' + ot).textContent = '—';
@@ -133,6 +173,7 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 function renderEvidence(ev) {
   if (!ev || !OBJECTS.includes(ev.object_type)) return;
   const ot = ev.object_type;
+  latestEvidence[ot] = ev;
   const latest = document.getElementById('ev-latest-' + ot);
   const badge = BADGE[ev.status] || esc(ev.status);
   let latestText = `最新获取：${badge} · retrieved_at ${esc((ev.retrieved_at || '').slice(11, 19))} · ${esc(ev.source)} · ${esc(ev.evidence_id)}`;
@@ -150,10 +191,91 @@ async function backfillEvidence() {
       const res = await fetch(`/api/evidence/latest/${ot}`);
       if (!res.ok) continue;
       const body = await res.json();
-      if (body.evidence) renderEvidence(body.evidence);
+      if (body.evidence) { latestEvidence[ot] = body.evidence; renderEvidence(body.evidence); }
     } catch (e) { /* 后端未就绪时静默，连接后由 WS 帧补齐 */ }
   }
 }
+
+// ---------- 视图一：整体态势（summary/main_impacts/unknown_items/completeness/run_id） ----------
+const esc2 = esc; // 复用转义
+function renderRun(run) {
+  if (!run) return;
+  document.getElementById('sit-run-id').textContent = run.run_id;
+  document.getElementById('sit-time').textContent = 'created_at ' + (run.created_at || '').slice(11, 19);
+  const comp = document.getElementById('sit-completeness');
+  comp.textContent = run.situation_completeness;
+  comp.className = run.situation_completeness === 'complete' ? 'b-complete' : 'b-partial';
+  document.getElementById('sit-summary').textContent = run.situation.summary;
+  const main = run.situation.main_impacts || [];
+  const box = document.getElementById('sit-main');
+  box.innerHTML = '';
+  if (!main.length) {
+    box.innerHTML = '<div class="sit-none">无需要关注的主要影响（主要条件稳定）</div>';
+  }
+  for (const imp of main) {
+    const div = document.createElement('div');
+    div.className = 'sit-impact';
+    const ot = IMPACT_OBJ[imp.impact_type];
+    const eid = (run.evidence_refs || {})[ot] || '无引用';
+    const eidHtml = eid === '无引用' ? esc2(eid) : `<span class="evlink" data-eid="${esc2(eid)}">${esc2(eid)}</span>`;
+    div.innerHTML =
+      `<div class="msg">${esc2(imp.message)}</div>` +
+      `<div class="detail">约束: ${esc2(imp.source_constraint)} · 派生结果: ${esc2(imp.source_derived_result)} · 证据: ${eidHtml}</div>`;
+    div.addEventListener('click', async (ev) => {
+      div.classList.toggle('open');
+      const link = ev.target.closest('.evlink');
+      if (!link) return;
+      try {
+        const res = await fetch('/api/evidence/' + encodeURIComponent(link.dataset.eid));
+        const body = await res.json();
+        const e = body.evidence;
+        document.getElementById('trace-panel').textContent =
+          `证据详情: ${e.evidence_id} · status=${e.status} · observed_at=${e.observed_at || 'null'} · retrieved_at=${(e.retrieved_at || '').slice(11, 19)} · source=${e.source}` + (e.error_message ? ` · ${e.error_message}` : '');
+      } catch (err) {
+        document.getElementById('trace-panel').textContent = '证据详情获取失败';
+      }
+    });
+    box.appendChild(div);
+  }
+  const unk = run.unknown_items || [];
+  const unkEl = document.getElementById('sit-unknown');
+  unkEl.hidden = !unk.length;
+  unkEl.textContent = '未知项（缺少证据引用）: ' + unk.join('、');
+}
+
+async function loadLatestRun() {
+  try {
+    const res = await fetch('/api/runs/latest');
+    if (res.ok) renderRun(await res.json());
+  } catch (e) { /* 尚无运行记录时保持占位 */ }
+}
+
+async function executeRun() {
+  const st = document.getElementById('run-status');
+  if (!latestStates) { st.textContent = '暂无数据源数据，无法运行'; return; }
+  const refs = OBJECTS.map(ot => latestEvidence[ot]).filter(e => e && e.status === 'ok').map(e => e.evidence_id);
+  st.textContent = '分析中…';
+  try {
+    const res = await fetch('/api/runs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({scenario_id: null, states: latestStates, evidence_refs: refs}),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      st.textContent = '运行失败: ' + (err.detail || ('HTTP ' + res.status));
+      return;
+    }
+    const created = await res.json();
+    const snap = await fetch('/api/runs/' + created.run_id).then(r => r.json());
+    renderRun(snap);
+    st.textContent = '已生成新 run_id: ' + created.run_id;
+  } catch (e) {
+    st.textContent = '运行失败（后端未连接？）';
+  }
+}
+document.getElementById('btn-run').addEventListener('click', executeRun);
+loadLatestRun();
 
 function setConn(state, text) {
   const el = document.getElementById('conn');

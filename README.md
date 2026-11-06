@@ -282,6 +282,102 @@ remaining_capacity=700→500→350→250、ratio=0.70→0.50→0.35→0.25 持�
 
 **自动化测试**：`py -m tests.test_derived`（7 条：S1、S2 全序列、现场验证值×2、入口 1/2、路线映射、响应分层禁词守卫）。
 
+## A00 阶段04：局部影响 → 整体态势 → run_id
+
+### 硬性红线
+
+- 态势全部由 **Python 规则代码**计算，LLM 不参与判定；
+- run 记录存入 SQLite `runs` 表，**完成之后禁止原地覆盖**（代码中不存在 UPDATE runs 的路径，只有 INSERT 与 SELECT）；每次完整分析生成全新 `run_id`；
+- 只做 reality 运行（`run_type=reality`、`parent_run_id=null`）；what-if 属阶段07。
+
+### 教学影响映射规则（仅教学验证，不是真实安全标准）
+
+| 对象 | 条件 | 影响文案（message） | 是否进入 main_impacts |
+|---|---|---|---|
+| 容量 | remaining_capacity_ratio ≥ 0.50 | 容量余量充足 | 否 |
+| 容量 | 0.20 ≤ ratio < 0.50 | 容量余量缩小 / 容量约束正在逼近 | **是** |
+| 容量 | ratio < 0.20 | 容量余量明显缩小 / 容量相关压力上升 | **是** |
+| 入口 | entrance_ratio = 1.0 | 入口条件稳定 | 否 |
+| 入口 | entrance_ratio < 1.0 | 通行灵活性下降 | **是** |
+| 支持 | support_ratio ≥ 1 | 支持条件充足 | 否 |
+| 支持 | support_ratio < 1 | 支持能力下降 | **是** |
+| 路线 | route_flexibility = normal | 路线条件稳定 | 否 |
+| 路线 | route_flexibility = reduced | 路线灵活性下降 | **是** |
+
+每条 impact 结构：`impact_id / impact_type / source_constraint / source_derived_result / message`（可追溯回约束与派生结果）。
+
+### 整体态势聚合（有限教学聚合规则）
+
+- `main_impacts` 只放需要提高关注的影响（S1 → `[]`；S2 → `[capacity]`）；
+- `summary` 由规则归纳：无关注影响 → **当前主要条件稳定**；否则各影响标签以"、"连接，
+  未全部命中时追加"，其他主要条件保持稳定"（官方逐字：S2 → **容量约束正在逼近，其他主要条件保持稳定**）；
+- `unknown_items` = 本次运行缺少成功证据引用的对象；`situation_completeness` = complete / partial。
+
+### runs 建表 SQL（全新库；旧 Day1 表自动改名为 runs_legacy 保留）
+
+```sql
+CREATE TABLE IF NOT EXISTS runs (
+    run_id TEXT PRIMARY KEY,
+    scenario_id TEXT NULL,
+    run_type TEXT NOT NULL CHECK(run_type IN ('reality','what_if')),
+    parent_run_id TEXT NULL,
+    input_snapshot_json TEXT NOT NULL,
+    evidence_refs_json TEXT NOT NULL,
+    derived_results_json TEXT NOT NULL,
+    impacts_json TEXT NOT NULL,
+    situation_json TEXT NOT NULL,
+    unknown_items_json TEXT NOT NULL,
+    situation_completeness TEXT NOT NULL CHECK(situation_completeness IN ('complete','partial')),
+    created_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL
+);
+```
+
+> 迁移说明：Day1 骨架的旧 `runs` 表（含 scene_json/level/summary 的演示结构）在首次访问时
+> 整体改名保留为 `runs_legacy`（旧数据不丢），再按上表重建 `runs`。Day1 的 POST/GET /api/runs
+> 演示路由已退役（其余演示路由保留）。
+
+### 接口
+
+- `POST /api/runs` — 请求：`{"scenario_id": "S1"|null, "states": {crowd, entrance:{available}, main_route, support}, "evidence_refs": ["ev_...", ...]}`；
+  `evidence_refs` 中的每个 id 必须存在于 evidence 表且 `status=ok`（否则 422）；执行完整分析并落库，返回 `{"run_id": "run-..."}`
+- `GET /api/runs/{run_id}` — 整套运行快照：input_snapshot（states+config）/ evidence_refs（对象→证据id 映射）/ derived_results / impacts / situation / unknown_items / situation_completeness / created_at / completed_at；不存在 404
+- `GET /api/runs/latest` — 最近一次 reality 运行快照（首页"当前 run_id"用）
+
+### 前端【视图一：整体态势页面】
+
+首页顶部展示：当前 `run_id`、`summary` 整体结论、`main_impacts` 主要影响（点击展开约束/派生结果，
+点击证据 id 查看证据详情）、`unknown_items`、完整性徽章；按钮"执行现实运行"用当前数据源状态 +
+最新成功证据生成新 run_id（reality）。
+
+### 手动复现 S1 / S2（完整链路：状态→证据→约束→派生→影响→态势→run_id）
+
+PowerShell（单引号 JSON + `Invoke-RestMethod`，无引号坑）；先取四个最新成功证据 id：
+```powershell
+(Invoke-RestMethod http://127.0.0.1:8000/api/evidence/latest/crowd).evidence.evidence_id
+(Invoke-RestMethod http://127.0.0.1:8000/api/evidence/latest/entrance).evidence.evidence_id
+(Invoke-RestMethod http://127.0.0.1:8000/api/evidence/latest/main_route).evidence.evidence_id
+(Invoke-RestMethod http://127.0.0.1:8000/api/evidence/latest/support).evidence.evidence_id
+```
+把四个 id 代入下面命令的 evidence_refs（也可用 /docs 页面操作）：
+
+**S1**：
+```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:8000/api/runs -Method Post -ContentType 'application/json' -Body '{"scenario_id":"S1","states":{"crowd":300,"entrance":{"available":2},"main_route":"normal","support":12},"evidence_refs":["ev_crowd_xxx","ev_entrance_xxx","ev_main_route_xxx","ev_support_xxx"]}'
+```
+返回 `run_id`（如 `run-20261106-175632-7cfcd3`）。`Invoke-RestMethod http://127.0.0.1:8000/api/runs/<run_id>` 查看快照，
+期望：`summary = 当前主要条件稳定`、`main_impacts = []`、`unknown_items = []`、`situation_completeness = complete`。
+
+**S2**：把 `"crowd":300` 改成 `"crowd":750`（scenario_id 改 "S2"）重发 → **新的 run_id**，
+期望：`summary = 容量约束正在逼近，其他主要条件保持稳定`、`main_impacts = [capacity]`、
+`derived_results.capacity = {remaining_capacity: 250, remaining_capacity_ratio: 0.25}`。
+
+**验证不可覆盖**：再次取第一次的 `/api/runs/<S1的run_id>` → 快照与之前完全一致（旧运行未被改写）；
+`GET /api/runs/latest` = 最后一次运行。
+
+**自动化测试**：`py -m tests.test_situation`（9 条：S1、S2-750、S2 全序列、620 现场值、入口 1/2、
+支持 8、路线 limited、全命中档、unknown/partial）。
+
 ## 开发约定
 
 - 代码为本项目新写，基于已学能力迁移式实现（多站点并列判定思路 → 多对象状态并行采集）。

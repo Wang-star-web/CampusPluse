@@ -139,28 +139,9 @@ def whatif(rain: int = 0, crowd: int | None = None, e2: str | None = None):
     return {"modified": {"rain": bool(rain), "crowd": crowd, "e2": e2}, "situation": compute_situation(scene)}
 
 
-@app.post("/api/runs")
-def new_run():
-    sit = compute_situation(SCENE)
-    rid = f"run-{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
-    conn = db()
-    import json
-    conn.execute(
-        "INSERT INTO runs (run_id, created_at, scene_json, level, summary) VALUES (?,?,?,?,?)",
-        (rid, datetime.now().isoformat(), json.dumps(SCENE, ensure_ascii=False), sit["level"], "；".join(sit["factors"])),
-    )
-    conn.commit()
-    conn.close()
-    return {"run_id": rid, "level": sit["level"], "factors": sit["factors"]}
-
-
-@app.get("/api/runs")
-def list_runs():
-    conn = db()
-    rows = [dict(r) for r in conn.execute(
-        "SELECT run_id, created_at, level, summary FROM runs ORDER BY created_at DESC LIMIT 20").fetchall()]
-    conn.close()
-    return rows
+# 说明：Day1 演示用 POST/GET /api/runs 已退役（2026-11-06 用户拍板）——
+# 阶段04 正式接管 /api/runs（runs 表经 db._ensure_runs_schema 列迁移兼容旧数据，
+# Day1 其余演示路由 /api/scene、/api/overview、/api/whatif 保持不动）。
 
 
 app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
@@ -297,6 +278,77 @@ def api_compute_derived(states: DerivedInput):
     三层，不生成局部影响与整体态势。
     """
     return compute_derived(states)
+
+
+# ---------- A00 阶段04：局部影响 → 整体态势 → run_id（reality 运行；完成后永不覆盖） ----------
+import uuid as _uuid
+from datetime import datetime as _dt, timezone as _tz
+
+from .db import insert_run, query_evidence, query_latest_run, query_run
+from .schemas import RunRequest
+from .situation import IMPACT_TO_OBJECT, build_impacts, build_situation
+
+
+@app.post("/api/runs")
+def api_create_run(req: RunRequest):
+    """完整分析：输入状态+证据引用 → 约束 → 派生结果 → impacts → situation → 新 run_id 落库。
+
+    只做 reality（run_type=reality, parent_run_id=null）；what-if 属阶段07。
+    situation/summary 全部由 Python 教学规则生成，LLM 不参与判定。
+    完成后的 run 永不 UPDATE——新输入必然生成全新 run_id。
+    """
+    refs = {}  # object_type -> evidence_id；每个引用必须指向真实成功证据
+    for eid in req.evidence_refs:
+        ev = query_evidence(eid)
+        if ev is None:
+            raise HTTPException(status_code=422, detail=f"evidence not found: {eid}")
+        if ev["status"] != "ok":
+            raise HTTPException(status_code=422, detail=f"evidence not ok: {eid} (status={ev['status']})")
+        refs[ev["object_type"]] = eid
+
+    derived = compute_derived(req.states)
+    impacts, main_impacts = build_impacts(derived["derived"])
+    unknown_items = sorted(set(IMPACT_TO_OBJECT.values()) - set(refs))
+    situation = build_situation(impacts, main_impacts, unknown_items,
+                                derived["derived"]["capacity"]["remaining_capacity_ratio"])
+
+    now = _dt.now(_tz.utc).isoformat()
+    run_id = f"run-{_dt.now():%Y%m%d-%H%M%S}-{_uuid.uuid4().hex[:6]}"
+    insert_run({
+        "run_id": run_id,
+        "scenario_id": req.scenario_id,
+        "input_snapshot": {
+            "states": derived["states"],
+            "config": derived["config"],
+        },
+        "evidence_refs": refs,
+        "derived_results": derived["derived"],
+        "impacts": impacts,
+        "situation": situation,
+        "unknown_items": unknown_items,
+        "situation_completeness": situation["situation_completeness"],
+        "created_at": now,
+        "completed_at": now,
+    })
+    return {"run_id": run_id}
+
+
+@app.get("/api/runs/latest")
+def api_latest_run():
+    """最近一次 reality 运行快照（首页"当前 run_id"用）。"""
+    snap = query_latest_run()
+    if snap is None:
+        raise HTTPException(status_code=404, detail="no run yet")
+    return snap
+
+
+@app.get("/api/runs/{run_id}")
+def api_get_run(run_id: str):
+    """按 run_id 获取整套运行快照：输入、证据引用、派生结果、impacts、situation、unknown_items。"""
+    snap = query_run(run_id)
+    if snap is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return snap
 
 
 @app.get("/{full_path:path}")
