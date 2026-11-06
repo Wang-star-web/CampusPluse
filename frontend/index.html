@@ -96,6 +96,15 @@
   .cmp-sec { margin-top:8px; font-weight:700; color:#1f2328; }
   .whatif-form { margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; background:#ffffff; border:1px solid #d1d9e0; border-radius:8px; padding:10px 12px; }
   .whatif-form input, .whatif-form select { background:#f6f8fa; color:#1f2328; border:1px solid #d1d9e0; border-radius:8px; padding:6px 8px; font-size:12px; }
+  .view2 { margin:24px 0; }
+  .view2 h2 { font-size:16px; margin-bottom:12px; color:#1f2328; }
+  .v2-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+  .v2-card { background:#ffffff; border:1px solid #d1d9e0; border-radius:10px; padding:14px; box-shadow:0 1px 2px rgba(31,35,40,0.04); }
+  .v2-card h4 { font-size:13px; color:#0969da; margin-bottom:8px; }
+  .v2-step { font-size:12px; color:#1f2328; font-family:Consolas,monospace; padding:4px 0; border-bottom:1px dashed #eaeef2; cursor:pointer; }
+  .v2-step:hover { background:#f6f8fa; }
+  .v2-step .k { color:#59636e; }
+  .v2-arrow { color:#8c959f; text-align:center; font-size:11px; padding:1px 0; }
   .venue-section { margin:24px 0; }
   .venue-wrap { background:#0a0d11; border:1px solid #d1d9e0; border-radius:10px; overflow:hidden; }
   #venue-canvas { width:100%; height:340px; display:block; }
@@ -142,6 +151,11 @@
   </div>
   <div class="hint" id="hint" hidden>暂无对象数据 —— 请确认 MQTT broker（mosquitto）与 4 个模拟器已启动</div>
 
+  <div class="view2">
+    <h2>视图二 · 对象与约束（与视图一同一 run 底座；点击每层可追溯）</h2>
+    <div class="v2-grid" id="v2-grid"></div>
+  </div>
+
   <div class="venue-section">
     <h2>场地视图（3D · 只呈现已算出的结果，不参与计算）</h2>
     <div class="venue-wrap">
@@ -187,6 +201,8 @@
   <div class="view4">
     <h2>视图四 · 场景回放与条件推演（what-if）</h2>
     <div><button class="btn2" id="btn-load-runs">加载运行列表</button>
+      <select id="scenario-select" class="btn2"><option value="">S1-S5 场景加载…</option><option value="S1">S1 稳定基线</option><option value="S2">S2 约束逼近</option><option value="S3">S3 外部扰动</option><option value="S4">S4 多因素</option><option value="S5">S5 信息退化</option></select>
+      <button class="btn2" id="btn-scenario-run">按选中场景执行 reality 运行</button>
       <span id="v4-status" style="font-size:12px;color:#8b949e;margin-left:8px;"></span></div>
     <div id="run-list"></div>
     <div class="whatif-form">
@@ -283,6 +299,11 @@ async function backfillEvidence() {
       if (body.evidence) { latestEvidence[ot] = body.evidence; renderEvidence(body.evidence); }
     } catch (e) { /* 后端未就绪时静默，连接后由 WS 帧补齐 */ }
   }
+  // 未来条件证据（S3/S4/S5 场景运行引用用）
+  try {
+    const body = await (await fetch('/api/evidence?role=future_condition&limit=1')).json();
+    if (body.evidence && body.evidence.length) latestEvidence.weather = body.evidence[0];
+  } catch (e) { /* 静默 */ }
 }
 
 // ---------- 视图一：整体态势（summary/main_impacts/unknown_items/completeness/run_id） ----------
@@ -305,6 +326,7 @@ function renderRun(run) {
   lastRunRatio = (run.derived_results && run.derived_results.capacity)
     ? run.derived_results.capacity.remaining_capacity_ratio : null;
   venueFromLatest();
+  renderView2(run);   // 视图二与视图一同一 run 快照（不重新计算）
   document.getElementById('sit-run-id').textContent = run.run_id;
   document.getElementById('sit-time').textContent = 'created_at ' + (run.created_at || '').slice(11, 19);
   const comp = document.getElementById('sit-completeness');
@@ -469,6 +491,77 @@ document.querySelectorAll('.preset').forEach(btn => {
 });
 
 // ---------- 场地视图：3D 只呈现已算出的结果（不参与计算）；Three.js 缺失时 SVG 降级 ----------
+// ---------- 视图二：对象与约束（与视图一同一个 run 快照，只展示不重算） ----------
+function renderView2(run) {
+  const box = document.getElementById('v2-grid');
+  if (!run) { box.innerHTML = '<div class="sit-none">尚无运行记录</div>'; return; }
+  const st = run.input_snapshot.states;
+  const cfg = run.input_snapshot.config;
+  const der = run.derived_results;
+  const impByType = {};
+  for (const i of run.impacts) impByType[i.impact_type] = i;
+  const mainSet = new Set((run.situation.main_impacts || []).map(i => i.impact_type));
+  const affectedSet = new Set(run.situation.affected_impacts || []);
+  const refOf = ot => {
+    const e = (run.evidence_refs || {})[ot];
+    if (!e) return '无引用';
+    const id = typeof e === 'string' ? e : e.evidence_id;
+    const stt = typeof e === 'string' ? 'ok' : e.status;
+    return `<span class="evlink" data-eid="${esc(id)}">${esc(id)}</span>${stt !== 'ok' ? ` <span class="pill pill-${esc(stt)}">${esc(stt)}</span>` : ''}`;
+  };
+  const step = (label, content, tip) => `<div class="v2-step" data-tip="${esc(tip || '')}"><span class="k">${label}</span> ${content}</div>`;
+  const arrow = '<div class="v2-arrow">▼</div>';
+  const cards = [
+    { ot: 'crowd', icon: '👥', title: '人群数量 crowd',
+      state: `${st.crowd} 人`,
+      ev: refOf('crowd'),
+      cons: `capacity = ${cfg.capacity}`,
+      der: `remaining_capacity = ${der.capacity.remaining_capacity} · ratio = ${der.capacity.remaining_capacity_ratio}`,
+      imp: impByType.capacity, tip: `constraint: capacity=${cfg.capacity}；derived: remaining_capacity_ratio=${der.capacity.remaining_capacity_ratio}` },
+    { ot: 'entrance', icon: '🚪', title: '入口 entrance',
+      state: `可用 ${st.entrance.available} / ${cfg.entrance_total}`,
+      ev: refOf('entrance'),
+      cons: `entrance_total = ${cfg.entrance_total}`,
+      der: `entrance_ratio = ${der.entrance.entrance_ratio}`,
+      imp: impByType.entrance, tip: `constraint: entrance_total=${cfg.entrance_total}；derived: entrance_ratio=${der.entrance.entrance_ratio}` },
+    { ot: 'main_route', icon: '🛣️', title: '主要路线 main_route',
+      state: st.main_route == null ? 'null（本次未确认）' : st.main_route,
+      ev: refOf('main_route'),
+      cons: 'normal→normal / limited→reduced 映射',
+      der: `route_flexibility = ${der.route.route_flexibility}`,
+      imp: impByType.route, tip: `constraint: main_route→route_flexibility 映射；derived: route_flexibility=${der.route.route_flexibility}` },
+    { ot: 'support', icon: '🧑‍🚒', title: '支持人员 support',
+      state: `${st.support} 人`,
+      ev: refOf('support'),
+      cons: `support_reference = ${cfg.support_reference}`,
+      der: `support_gap = ${der.support.support_gap} · ratio = ${der.support.support_ratio}`,
+      imp: impByType.support, tip: `constraint: support_reference=${cfg.support_reference}；derived: support_ratio=${der.support.support_ratio}` },
+  ];
+  box.innerHTML = '';
+  for (const c of cards) {
+    const div = document.createElement('div');
+    div.className = 'v2-card';
+    const imp = c.imp;
+    const flags = mainSet.has(imp.impact_type)
+      ? ' <span class="pill" style="background:#fff8e5;color:#9a6700;">主要影响</span>'
+      : (affectedSet.has(imp.impact_type) ? ' <span class="pill" style="background:#eaeef2;color:#59636e;">判断不完整</span>' : '');
+    div.innerHTML = `<h4>${c.icon} ${c.title}</h4>`
+      + step('① 状态', esc(c.state), '来源：本次运行的 input_snapshot.states')
+      + arrow + step('② 证据', c.ev, '证据引用（点击查详情）')
+      + arrow + step('③ 约束', esc(c.cons), c.tip)
+      + arrow + step('④ 派生结果', esc(c.der), c.tip)
+      + arrow + step('⑤ 影响', `${esc(imp.message)}${flags}`, `impact: ${esc(imp.message)}；${c.tip}`);
+    div.querySelectorAll('.v2-step').forEach(s => {
+      s.addEventListener('click', ev => {
+        const link = ev.target.closest('.evlink');
+        if (link) { showEvidenceDetail(link.dataset.eid); return; }
+        document.getElementById('trace-panel').textContent = s.dataset.tip;
+      });
+    });
+    box.appendChild(div);
+  }
+}
+
 let lastRunRatio = null;   // 来自最新 run 的 derived remaining_capacity_ratio（规则已算好，只呈现）
 let venueState = { crowd: 0, entrance_available: 0, route: null, support: 0 };
 let venueMode = 'none';
@@ -680,6 +773,43 @@ async function loadRuns() {
   } catch (err) { st.textContent = '加载失败（后端未连接？）'; }
 }
 document.getElementById('btn-load-runs').addEventListener('click', loadRuns);
+
+// S1-S5 官方冻结场景输入（教学场景，非现实标准；S5 路线为 null=本次未确认）
+const SCENARIO_STATES = {
+  S1: {crowd:300, entrance:{available:2}, main_route:'normal', support:12},
+  S2: {crowd:750, entrance:{available:2}, main_route:'normal', support:12},
+  S3: {crowd:750, entrance:{available:2}, main_route:'normal', support:12},
+  S4: {crowd:900, entrance:{available:1}, main_route:'limited', support:8},
+  S5: {crowd:900, entrance:{available:1}, main_route:null, support:8},
+};
+document.getElementById('btn-scenario-run').addEventListener('click', async () => {
+  const sc = document.getElementById('scenario-select').value;
+  const st = document.getElementById('v4-status');
+  if (!sc) { st.textContent = '请先选择场景'; return; }
+  st.textContent = `执行 ${sc}…`;
+  try {
+    const refs = OBJECTS.filter(ot => ot !== 'main_route' || sc !== 'S5')
+      .map(ot => latestEvidence[ot]).filter(e => e && e.status === 'ok').map(e => e.evidence_id);
+    if (['S3','S4','S5'].includes(sc) && latestEvidence.weather) {
+      refs.push(latestEvidence.weather.evidence_id);   // S5 允许 unavailable 天气引用
+    }
+    const res = await fetch('/api/runs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({scenario_id: sc, states: SCENARIO_STATES[sc], evidence_refs: refs}),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      st.textContent = '运行失败: ' + (err.detail || ('HTTP ' + res.status));
+      return;
+    }
+    const created = await res.json();
+    const snap = await (await fetch('/api/runs/' + created.run_id)).json();
+    renderRun(snap);
+    loadRuns();
+    st.textContent = `${sc} 已运行: ${created.run_id}`;
+  } catch (err) { st.textContent = '运行失败（后端未连接？）'; }
+});
 
 function renderCompare(aId, bId) {
   const out = document.getElementById('cmp-out');

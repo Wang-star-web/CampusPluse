@@ -284,7 +284,7 @@ def api_compute_derived(states: DerivedInput):
 import uuid as _uuid
 from datetime import datetime as _dt, timezone as _tz
 
-from . import sources as _sources
+from . import pipeline, sources as _sources
 from .db import insert_run, query_evidence, query_latest_run, query_run
 from .schemas import RunRequest
 from .situation import IMPACT_TO_OBJECT, build_impacts, build_situation
@@ -325,31 +325,11 @@ def _run_pipeline(states: DerivedInput, refs_entries: dict, scenario_id: str | N
                   overrides: dict | None = None, assumptions: dict | None = None) -> dict:
     """完整分析链（reality 与 what-if 共用）：约束 → 派生 → impacts → situation → 落库。
 
-    阶段07：unknown_items / affected_impacts / situation_completeness 由显式规则生成；
+    分析逻辑在 pipeline.run_analysis（与回归脚本共用同一套生产逻辑）；
     只 INSERT 不 UPDATE——现实/推演各自全新 run_id。
     """
-    derived = compute_derived(states)
-    impacts, main_impacts, route_affected = build_impacts(derived["derived"])
-
-    unknown_items: list[str] = []
-    affected: list[str] = list(route_affected)
     refs_norm = _normalize_refs(refs_entries)
-    for key, entry in refs_norm.items():
-        if entry["status"] != "ok" and key == "future_condition":
-            unknown_items.append("weather_future_condition")   # 天气取证失败 → 未来条件未知
-            affected.append("future_route_impact")
-    for ot in ("crowd", "entrance", "support"):                 # 缺失 current_fact 引用 → 未知
-        if ot not in refs_norm:
-            unknown_items.append(ot)
-    if states.main_route is None:                               # 本次路线事实无法确认（未知 ≠ 异常）
-        unknown_items.append("route_current_state")
-    elif "main_route" not in refs_norm:
-        unknown_items.append("main_route")
-    unknown_items = sorted(set(unknown_items))
-    affected = sorted(set(affected))
-
-    situation = build_situation(impacts, main_impacts, unknown_items,
-                                derived["derived"]["capacity"]["remaining_capacity_ratio"], affected)
+    analysis = pipeline.run_analysis(states, refs_norm)
 
     now = _dt.now(_tz.utc).isoformat()
     run_id = f"run-{_dt.now():%Y%m%d-%H%M%S}-{_uuid.uuid4().hex[:6]}"
@@ -358,15 +338,15 @@ def _run_pipeline(states: DerivedInput, refs_entries: dict, scenario_id: str | N
         "scenario_id": scenario_id,
         "run_type": run_type,
         "parent_run_id": parent_run_id,
-        "input_snapshot": {"states": derived["states"], "config": derived["config"]},
+        "input_snapshot": {"states": analysis["states"], "config": analysis["config"]},
         "input_overrides": overrides,
         "assumptions": assumptions,
         "evidence_refs": refs_norm,
-        "derived_results": derived["derived"],
-        "impacts": impacts,
-        "situation": situation,
-        "unknown_items": unknown_items,
-        "situation_completeness": situation["situation_completeness"],
+        "derived_results": analysis["derived"],
+        "impacts": analysis["impacts"],
+        "situation": analysis["situation"],
+        "unknown_items": analysis["unknown_items"],
+        "situation_completeness": analysis["situation_completeness"],
         "created_at": now,
         "completed_at": now,
     })

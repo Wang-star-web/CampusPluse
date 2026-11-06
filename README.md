@@ -1,12 +1,83 @@
-# CampusPulse · 校园活动脉搏（A00：多对象现场数据链 + 证据层）
+# CampusPulse · 校园活动脉搏（A00 态势认知 · 阶段01-08 完整实现）
 
-阶段01 打通：**模拟数据源 → MQTT → FastAPI 内存状态 → WebSocket → 浏览器最小看板**。
-阶段02 新增：**证据层** —— SQLite 双表（observations / evidence）双写、3 个证据查询接口、看板证据追踪区。
-阶段03 新增：**显式约束与派生结果** —— 独立教学配置 + `POST /api/compute-derived` 约束计算接口 + S1/S2 测试。
+## 项目简介
 
-页面展示 4 个对象的**原始业务数值**与**本次取证状态**（严格区分"最后成功确认的业务值"与
-"最新获取状态"）；各阶段刻意**不做**：态势计算、影响链、run_id。所有数据来自模拟器经 MQTT
-推送的实时状态（`source_type=SIMULATED`），页面自己不维护另一套"当前值"。
+CampusPulse 是校园大型活动（校园开放日）的**态势认知系统**：把多源现场状态放进显式约束，
+由 **Python 规则代码**计算出可追溯的派生结果、局部影响与整体态势，并用 LLM 只做解释（不参与判定）。
+
+完整认知链：**对象状态 → 证据 → 约束 → 派生结果 → 局部影响 → 整体态势 → run_id**。
+全链路可追溯：任意整体结论都能沿 main_impacts → derived_results → constraints → evidence 逐层下钻。
+
+**四个视图基于同一个 run_id 底座**（同一份结构化结果，任何视图都不重新计算另一套态势）：
+
+| 视图 | 内容 |
+|---|---|
+| 视图一 · 整体态势 | run_id、summary、main_impacts、unknown_items、完整性；点击影响展开约束/派生结果/证据 |
+| 视图二 · 对象与约束 | 每个对象 状态→证据→约束→派生结果→影响 五层追溯链（层层可点击） |
+| 视图三 · 证据与运行 | 全部证据按 evidence_role 分组（current_fact/future_condition/knowledge_basis/model_output），状态/来源/时间 |
+| 视图四 · 场景回放与条件推演 | S1-S5 场景加载、what-if 推演（父子 run）、运行对比 |
+
+另有 **场地 3D 视图**（Three.js，本地 vendor）：**3D 只读 `/api/runs/{run_id}` 的结果做空间渲染，
+不参与任何业务计算**；Three.js 加载失败自动降级为同数据 2D SVG 平面图（不影响功能评分）。
+
+⚠️ **教学参数声明**：capacity=1000、entrance_total=2、support_reference=10 及全部影响阈值、
+态势标签（如"组织压力上升"）**仅用于本教学案例的软件验证，不代表现实安全等级、
+专业活动管理标准或应急风险阈值**；模拟数据保留 `SIMULATED` 标记；LLM 只解释已算好的结果，
+不发明事实、不修改态势、不补齐缺失证据。
+
+## 快速开始（验收演示最短路径）
+
+```
+1. 安装依赖     py -m pip install -r requirements.txt
+2. 启动 broker   "C:\Program Files\mosquitto\mosquitto.exe" -c mosquitto\mosquitto.conf -v
+3. 启动后端     py -m uvicorn backend.main:app --port 8000
+4. 启动模拟器   4 个终端分别 py simulators\{crowd,entrance,main_route,support}_sim.py
+5. 打开看板     http://127.0.0.1:8000/
+6. 跑回归       py -m tests.regression          （离线，5/5 教学预期校验）
+                py -m tests.regression --live   （在线真实链路；S5 需教学注入，未注入自动跳过）
+```
+
+## 环境与配置（.env.example 说明）
+
+复制 `.env.example` 为 `.env`（已被 git 忽略，**密钥绝不提交**），变量一览：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| LLM_BASE_URL / LLM_API_KEY / LLM_MODEL | deepseek / 空 / deepseek-chat | LLM 解释层（不配 key 时解释接口 503，核心功能不受影响） |
+| OPEN_METEO_BASE_URL / LATITUDE / LONGITUDE | 官方 API / 上海坐标 | 天气 Web API（无需 Key） |
+| WEATHER_TEACHING_CONDITION | 空 | 教学覆写：`heavy_rain_expected`（S3/S4 复现）/ `unavailable`（S5 取证失败） |
+| ROUTE_TOOL_TEACHING_UNAVAILABLE | 空 | `1` 时路线工具取证失败（S5） |
+| RAG_KB_DIR / TOOL_TIMEOUT_S | kb / 5 | 本地知识库目录 / 外部请求超时 |
+
+后端通过 `backend/envloader.py` 自动读取仓库根 `.env`（UTF-8/GBK 双编码容错），任意方式启动均可生效。
+
+## 回归测试
+
+```
+py -m tests.regression          # 离线：生产管线纯函数 pipeline.run_analysis，S1-S5 全量断言 + 报告
+py -m tests.regression --live   # 在线：真实 API 完整证据+运行链路（S5 需教学注入否则跳过）
+py -m tests.test_derived        # 阶段03 约束计算 7 条
+py -m tests.test_situation      # 阶段04 影响与态势 10 条
+py -m tests.test_sources        # 阶段05 多源证据 8 条
+py -m tests.test_predict        # 阶段06 预测与解释 6 条
+py -m tests.test_whatif         # 阶段07 推演与降级 5 条
+```
+
+回归校验内容（S1-S5 官方冻结预期）：派生结果数值、impact 文案、main_impacts、
+summary、unknown_items、affected_impacts、situation_completeness；退出码 0=全部通过。
+
+## S1-S5 复现总览（详情见各阶段章节）
+
+| 场景 | 输入（教学） | 期望整体态势 | 快速方式 |
+|---|---|---|---|
+| S1 稳定基线 | 300 人、2/2、normal、12 | 当前主要条件稳定 | 看板点【300】预设→执行现实运行；或视图四选 S1 |
+| S2 约束逼近 | 750 人，其余同 S1 | 容量约束正在逼近，其他主要条件保持稳定 | 预设【750】或视图四选 S2 |
+| S3 外部扰动 | 750 人 + 未来强降雨预报 | 同 S2（**未来条件不改写当前路线**） | .env 天气覆写 + 视图四选 S3 |
+| S4 多因素 golden | 900、1/2、limited、8 + 天气/RAG/预测证据 | 组织压力上升（教学标签） | 阶段06 整段脚本或视图四选 S4 |
+| S5 信息退化 | 天气/路线取证失败，其余同 S4 | 部分影响判断不完整（证据不完整），partial | .env 两行注入 + 视图四选 S5 或回归 --live |
+
+每次运行生成唯一 `run_id`（run_type=reality/what_if）；完成后的 run **永不覆盖**，
+改条件走 what-if 新运行，丢证据走 reality 新运行（可信降级）。
 
 ## 架构
 
