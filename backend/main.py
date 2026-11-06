@@ -248,3 +248,12 @@ def sim_set_config(cfg: SimConfig):
     """
     sim_config.set(cfg.model_dump())
     return sim_config.get()
+
+
+@app.get("/{full_path:path}")
+def spa_fallback(full_path: str):
+    """未知 GET 路径一律回退到看板页面（单页应用容错：/index.html、旧链接等不再 404）。
+
+    必须注册在所有路由之后；/api/*、/ws、/docs、/health 等已注册路径不受影响。
+    """
+    return FileResponse(FRONTEND / "index.html")
