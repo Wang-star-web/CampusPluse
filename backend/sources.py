@@ -14,7 +14,10 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .envloader import load_dotenv
 from .state import store
+
+load_dotenv()
 
 ACTIVITY_ID = "campus_open_day_01"
 
