@@ -54,6 +54,12 @@ class SimConfigStore:
         "entrance_available": 2,
         "main_route": "normal",
         "support": 10,
+        "mode": {                  # 阶段02：各对象取证模式，默认全 ok
+            "crowd": "ok",
+            "entrance": "ok",
+            "main_route": "ok",
+            "support": "ok",
+        },
     }
 
     def __init__(self) -> None:

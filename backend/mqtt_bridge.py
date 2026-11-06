@@ -20,7 +20,7 @@ import paho.mqtt.client as mqtt
 from paho.mqtt.enums import MQTTErrorCode
 from pydantic import ValidationError
 
-from . import ws_hub
+from . import db, ws_hub
 from .schemas import ObservationEnvelope, envelope_to_dict
 from .state import store
 
@@ -74,7 +74,23 @@ def on_message(client, userdata, msg):
         # 信封优先，topic 尾段不一致仅告警
         log.warning("topic/object_type mismatch: topic=%s envelope=%s", msg.topic, env.object_type.value)
     accepted += 1
-    store.update(env.object_type.value, envelope_to_dict(env))
+    if env.retrieval_status is None:
+        # 成功：先更新内存（/api/current 的权威），再持久化（最佳努力；DB 故障不影响实时链路）
+        store.update(env.object_type.value, envelope_to_dict(env))
+        try:
+            row = db.insert_success(env, source=msg.topic)
+            ws_hub.notify_evidence(row)
+        except Exception:
+            log.exception("evidence insert failed (observation still applied to store)")
+    else:
+        # 取证失败：不触碰 store / observations，上一次成功值原地保留
+        try:
+            row = db.insert_failure(
+                env.object_type.value, env.retrieval_status, env.error_message,
+                source=msg.topic, source_type=env.source_type, activity_id=env.activity_id)
+            ws_hub.notify_evidence(row)
+        except Exception:
+            log.exception("failure evidence insert failed")
 
 
 def start() -> None:

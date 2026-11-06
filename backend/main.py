@@ -250,6 +250,40 @@ def sim_set_config(cfg: SimConfig):
     return sim_config.get()
 
 
+# ---------- A00 阶段02：证据层（双写、历史与证据查询；注册在 spa 兜底路由之前） ----------
+from fastapi import HTTPException, Query
+
+from .db import init_evidence_db, query_evidence, query_history, query_latest_evidence
+from .schemas import ObjectType
+
+
+@app.on_event("startup")
+def startup_stage02_evidence():
+    init_evidence_db()  # 幂等；db.connect() 每次也会自建表，防 MQTT 启动事件先行的竞态
+
+
+@app.get("/api/history/{object_type}")
+def api_history(object_type: ObjectType, limit: int = Query(50, ge=1, le=200)):
+    """对象过去怎样（只含成功业务事实）；非法 object_type → 422。"""
+    rows = query_history(object_type.value, limit)
+    return {"activity_id": mqtt_bridge.ACTIVITY_ID, "object_type": object_type.value,
+            "count": len(rows), "history": rows}
+
+
+@app.get("/api/evidence/latest/{object_type}")
+def api_evidence_latest(object_type: ObjectType):
+    """这一次为什么知道/为什么不知道；status 是获取状态，不是业务状态。"""
+    return {"object_type": object_type.value, "evidence": query_latest_evidence(object_type.value)}
+
+
+@app.get("/api/evidence/{evidence_id}")
+def api_evidence_by_id(evidence_id: str):
+    row = query_evidence(evidence_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="evidence not found")
+    return {"evidence": row}
+
+
 @app.get("/{full_path:path}")
 def spa_fallback(full_path: str):
     """未知 GET 路径一律回退到看板页面（单页应用容错：/index.html、旧链接等不再 404）。

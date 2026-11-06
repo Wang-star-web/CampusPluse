@@ -40,13 +40,26 @@ def fetch_config() -> dict | None:
 
 
 def build_envelope(object_type: str, data: dict, observed_at: str | None = None) -> dict:
-    """统一消息外壳；observed_at 缺省为当前 UTC 时间（ISO8601）。"""
+    """统一消息外壳（成功）；observed_at 缺省为当前 UTC 时间（ISO8601）。"""
     return {
         "activity_id": ACTIVITY_ID,
         "object_type": object_type,
         "observed_at": observed_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source_type": "SIMULATED",
         "data": data,
+    }
+
+
+def build_failure_envelope(object_type: str, status: str, error_message: str | None = None) -> dict:
+    """获取失败信封（阶段02）：observed_at 不伪造、data 不携带业务值。"""
+    return {
+        "activity_id": ACTIVITY_ID,
+        "object_type": object_type,
+        "observed_at": None,
+        "source_type": "SIMULATED",
+        "data": None,
+        "retrieval_status": status,
+        "error_message": error_message,
     }
 
 
@@ -66,6 +79,7 @@ def run_simulator(object_type: str, to_data) -> None:
     client.loop_start()
     topic = f"campuspulse/{ACTIVITY_ID}/state/{object_type}"
     last_data: dict | None = None
+    last_mode = "ok"  # 阶段02：取证模式；后端不可达时沿用（与 keep last config 一致）
     cfg_unreachable = False  # 仅在状态切换时告警，避免每 2s 刷屏
     print(f"[{object_type}] simulator started: topic={topic}, interval={PUBLISH_INTERVAL_S}s (Ctrl+C to stop)")
     try:
@@ -80,10 +94,20 @@ def run_simulator(object_type: str, to_data) -> None:
                 if cfg_unreachable:
                     print(f"[{object_type}] backend config recovered: {cfg}")
                 cfg_unreachable = False
-                data = to_data(cfg)
-                if data is not None:
-                    last_data = data
-            if last_data is not None:
+                mode_cfg = cfg.get("mode")  # 旧后端无 mode → 防御默认 ok
+                m = mode_cfg.get(object_type, "ok") if isinstance(mode_cfg, dict) else "ok"
+                last_mode = m if m in ("unavailable", "error") else "ok"  # 未知值防御 → ok
+                if last_mode == "ok":
+                    data = to_data(cfg)
+                    if data is not None:
+                        last_data = data
+            if last_mode in ("unavailable", "error"):
+                # 取证失败：主动上报失败信封（每周期一次，qos0 丢失下周期自愈）；绝不触碰 last_data
+                msg = "SIMULATED mode=error" if last_mode == "error" else None
+                client.publish(topic, json.dumps(build_failure_envelope(object_type, last_mode, msg)),
+                               qos=0, retain=False)
+                print(f"[{object_type}] published retrieval failure: status={last_mode}")
+            elif last_data is not None:
                 payload = json.dumps(build_envelope(object_type, last_data), ensure_ascii=False)
                 client.publish(topic, payload, qos=0, retain=False)
                 print(f"[{object_type}] published {last_data}")

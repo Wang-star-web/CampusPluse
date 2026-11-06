@@ -31,6 +31,17 @@
   .preset:hover { border-color:#58a6ff; }
   .preset.active { border-color:#58a6ff; color:#58a6ff; }
   #preset-status { font-size:12px; color:#8b949e; }
+  .ev-section { margin-top:24px; }
+  .ev-section h2 { font-size:16px; margin-bottom:12px; }
+  .ev-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+  .ev-block { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:14px; }
+  .ev-head { font-size:14px; color:#58a6ff; margin-bottom:8px; }
+  .ev-row { font-size:12px; color:#8b949e; line-height:1.7; font-family:Consolas,monospace; }
+  .ev-row b { color:#e6e8eb; }
+  /* 徽章色只表达"本次取数是否成功"（取证运营状态），绝不表达业务好坏；业务值一律无着色 */
+  .b-ok { color:#3fb950; }
+  .b-unavailable { color:#8b949e; }
+  .b-error { color:#d29922; }
 </style>
 </head>
 <body>
@@ -39,7 +50,7 @@
     <span class="badge" id="activity">activity_id: —</span>
     <span class="status" id="conn"><i></i><span id="conn-text">连接中…</span></span>
   </div>
-  <div class="sub">A00 阶段01 最小看板 · 只展示数据源原始数值（本阶段不做态势计算）</div>
+  <div class="sub">A00 阶段02 · 原始数据 + 证据追踪（本阶段不做态势计算）</div>
   <div class="toolbar">
     <label>场景预设（改数据源配置）</label>
     <button class="preset" data-crowd="300">300</button>
@@ -56,6 +67,24 @@
     <div class="card" id="card-entrance"><h3>入口 entrance</h3><div class="value" id="v-entrance">—</div><div class="unit">开放数 / 总数</div><div class="meta" id="m-entrance"></div></div>
     <div class="card" id="card-main_route"><h3>主要路线 main_route</h3><div class="value" id="v-main_route">—</div><div class="unit">状态</div><div class="meta" id="m-main_route"></div></div>
     <div class="card" id="card-support"><h3>支持人员 support</h3><div class="value" id="v-support">—</div><div class="unit">人</div><div class="meta" id="m-support"></div></div>
+  </div>
+
+  <div class="ev-section">
+    <h2>证据追踪 evidence</h2>
+    <div class="ev-grid">
+      <div class="ev-block"><div class="ev-head">人群数量 crowd</div>
+        <div class="ev-row" id="ev-ok-crowd">最后成功确认：—</div>
+        <div class="ev-row" id="ev-latest-crowd">最新获取：—</div></div>
+      <div class="ev-block"><div class="ev-head">入口 entrance</div>
+        <div class="ev-row" id="ev-ok-entrance">最后成功确认：—</div>
+        <div class="ev-row" id="ev-latest-entrance">最新获取：—</div></div>
+      <div class="ev-block"><div class="ev-head">主要路线 main_route</div>
+        <div class="ev-row" id="ev-ok-main_route">最后成功确认：—</div>
+        <div class="ev-row" id="ev-latest-main_route">最新获取：—</div></div>
+      <div class="ev-block"><div class="ev-head">支持人员 support</div>
+        <div class="ev-row" id="ev-ok-support">最后成功确认：—</div>
+        <div class="ev-row" id="ev-latest-support">最新获取：—</div></div>
+    </div>
   </div>
 
   <div class="footer">数据状态：持续更新 · 来源：SIMULATED（模拟数据）</div>
@@ -93,6 +122,36 @@ function renderSnapshot(payload) {
   for (const ot of OBJECTS) if (!seen.has(ot)) { // 尚未收到数据的对象保持占位
     document.getElementById('v-' + ot).textContent = '—';
     document.getElementById('m-' + ot).textContent = '等待数据';
+  }
+}
+
+const BADGE = {ok:'<span class="b-ok">ok</span>', unavailable:'<span class="b-unavailable">unavailable</span>', error:'<span class="b-error">error</span>'};
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// 证据追踪渲染：最后成功确认（业务值+observed_at+evidence_id）与最新获取（状态+retrieved_at+来源+evidence_id）。
+// 徽章颜色只表达本次取数是否成功（运营状态），业务值一律无色；失败时绝不显示伪造业务值。
+// 动态字段（source/evidence_id/error_message 等来自消息内容）全部 esc 转义防注入。
+function renderEvidence(ev) {
+  if (!ev || !OBJECTS.includes(ev.object_type)) return;
+  const ot = ev.object_type;
+  const latest = document.getElementById('ev-latest-' + ot);
+  const badge = BADGE[ev.status] || esc(ev.status);
+  let latestText = `最新获取：${badge} · retrieved_at ${esc((ev.retrieved_at || '').slice(11, 19))} · ${esc(ev.source)} · ${esc(ev.evidence_id)}`;
+  if (ev.error_message) latestText += ` · ${esc(ev.error_message)}`;
+  latest.innerHTML = latestText;
+  if (ev.status === 'ok' && ev.value_json) {
+    const okEl = document.getElementById('ev-ok-' + ot);
+    const v = valueText[ot](ev.value_json);
+    okEl.innerHTML = `最后成功确认：<b>${esc(v)}</b> · observed_at ${esc((ev.observed_at || '').slice(11, 19))} · ${esc(ev.evidence_id)}`;
+  }
+}
+async function backfillEvidence() {
+  for (const ot of OBJECTS) {
+    try {
+      const res = await fetch(`/api/evidence/latest/${ot}`);
+      if (!res.ok) continue;
+      const body = await res.json();
+      if (body.evidence) renderEvidence(body.evidence);
+    } catch (e) { /* 后端未就绪时静默，连接后由 WS 帧补齐 */ }
   }
 }
 
@@ -138,12 +197,13 @@ let retryDelay = 1;
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => { retryDelay = 1; setConn('connected', '已连接'); };
+  ws.onopen = () => { retryDelay = 1; setConn('connected', '已连接'); backfillEvidence(); };
   ws.onmessage = (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch (e) { return; }
     if (msg.type === 'snapshot') renderSnapshot(msg.payload);
     else if (msg.type === 'update' && OBJECTS.includes(msg.object_type)) renderObject(msg.object_type, msg.envelope);
+    else if (msg.type === 'evidence') renderEvidence(msg.evidence);
   };
   ws.onclose = () => {
     setConn('disconnected', `已断开，${retryDelay}s 后重连…`);
@@ -153,6 +213,7 @@ function connect() {
   ws.onerror = () => { ws.close(); };
 }
 connect();
+backfillEvidence();
 </script>
 </body>
 </html>

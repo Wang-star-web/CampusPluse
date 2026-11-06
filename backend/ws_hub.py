@@ -35,16 +35,30 @@ def notify(object_type: str, envelope: dict) -> None:
         pass  # 事件循环已关闭（进程关停竞态），丢弃本次广播
 
 
-async def _broadcast(object_type: str, envelope: dict) -> None:
-    msg = json.dumps(
-        {"type": "update", "object_type": object_type, "envelope": envelope},
-        ensure_ascii=False,
-    )
+async def _send(payload: dict) -> None:
+    """事件循环线程内广播一个 JSON 消息给全部连接。"""
+    msg = json.dumps(payload, ensure_ascii=False)
     for ws in list(CONNECTIONS):  # 取快照副本，迭代中可安全 discard
         try:
             await ws.send_text(msg)
         except Exception:
             CONNECTIONS.discard(ws)  # 断线客户端容错
+
+
+async def _broadcast(object_type: str, envelope: dict) -> None:
+    await _send({"type": "update", "object_type": object_type, "envelope": envelope})
+
+
+def notify_evidence(evidence: dict) -> None:
+    """MQTT 线程调用：证据行广播（阶段02；与 notify 同一投递模式）。"""
+    if LOOP is None or LOOP.is_closed():
+        return
+    try:
+        fut = asyncio.run_coroutine_threadsafe(
+            _send({"type": "evidence", "evidence": evidence}), LOOP)
+        fut.add_done_callback(_consume_exc)
+    except RuntimeError:
+        pass  # 事件循环已关闭（进程关停竞态），丢弃本次广播
 
 
 def register(ws: WebSocket) -> None:

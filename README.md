@@ -1,10 +1,11 @@
-# CampusPulse · 校园活动脉搏（A00 阶段01：多对象现场数据链）
+# CampusPulse · 校园活动脉搏（A00：多对象现场数据链 + 证据层）
 
-本阶段打通：**模拟数据源 → MQTT → FastAPI 内存状态 → WebSocket → 浏览器最小看板**。
+阶段01 打通：**模拟数据源 → MQTT → FastAPI 内存状态 → WebSocket → 浏览器最小看板**。
+阶段02 新增：**证据层** —— SQLite 双表（observations / evidence）双写、3 个证据查询接口、看板证据追踪区。
 
-页面只展示 4 个对象的**原始业务数值**，本阶段刻意**不做**：态势计算、影响链、证据、
-run_id、SQLite。所有数据来自模拟器经 MQTT 推送的实时状态（`source_type=SIMULATED`），
-页面自己不维护另一套"当前值"。
+页面展示 4 个对象的**原始业务数值**与**本次取证状态**（严格区分"最后成功确认的业务值"与
+"最新获取状态"）；各阶段刻意**不做**：态势计算、影响链、run_id。所有数据来自模拟器经 MQTT
+推送的实时状态（`source_type=SIMULATED`），页面自己不维护另一套"当前值"。
 
 ## 架构
 
@@ -18,7 +19,8 @@ backend: sim_config 内存配置 ◀──GET /api/sim/config（每 2s 轮询）
    │ Mosquitto 127.0.0.1:1883（topic: campuspulse/campus_open_day_01/state/*）
    ▼
 backend: mqtt_bridge（通配订阅+信封校验）→ state.py store ──┬─▶ GET /api/current
-                                                             └─▶ ws_hub → /ws → 浏览器看板
+        ├─▶ db.py 双写（成功：observations+evidence(ok) 同事务；失败：仅 evidence）  └─▶ ws_hub → /ws → 浏览器看板
+        └─▶ 证据查询：/api/history /api/evidence/latest /api/evidence/{id}
 ```
 
 统一消息外壳（每条 MQTT 消息）：
@@ -97,6 +99,14 @@ curl -X POST http://127.0.0.1:8000/api/sim/set -H "Content-Type: application/jso
 
 可取值：crowd ∈ {300,500,650,750,900}；entrance_available ∈ {1,2}；main_route ∈ {normal,limited}；support ∈ {8,10,12}（support=12 无预设按钮，但 API 合法）。
 
+**取证模式（阶段02）**：`mode` 字段按对象切换 `ok / unavailable / error`（可选，缺省全 ok；POST 不带 mode 会把模式重置为 ok）：
+
+```
+curl -X POST http://127.0.0.1:8000/api/sim/set -H "Content-Type: application/json" -d "{\"crowd\":500,\"entrance_available\":2,\"main_route\":\"normal\",\"support\":10,\"mode\":{\"entrance\":\"unavailable\"}}"
+```
+
+unavailable/error 只表示"本次取证失败"：新增失败证据（value_json=null），**不伪造业务值、不覆盖最后成功值**；改回 ok 即恢复双写。
+
 查看当前配置：`GET /api/sim/config`。
 
 ## 接口
@@ -107,6 +117,9 @@ curl -X POST http://127.0.0.1:8000/api/sim/set -H "Content-Type: application/jso
 - `WS /ws` → 连接即推全量快照，之后每个对象更新推增量
 - `GET /api/sim/config` → 当前模拟器配置（模拟器每 2s 轮询此接口）
 - `POST /api/sim/set` → 更新模拟器配置（body 见上表；非法值 422）
+- `GET /api/history/{object_type}` → 对象历史观测（只含成功业务事实；`limit` 默认 50，1~200；非法对象 422）
+- `GET /api/evidence/latest/{object_type}` → 对象最新一条证据（获取状态 ≠ 业务状态）
+- `GET /api/evidence/{evidence_id}` → 单条证据详情（不存在 404）
 
 ## 关闭与重启复现
 
@@ -133,6 +146,66 @@ curl -X POST http://127.0.0.1:8000/api/sim/set -H "Content-Type: application/jso
 | 统一消息外壳 | 每条消息含 activity_id/object_type/observed_at/source_type/data，全部属于 campus_open_day_01 |
 | 模拟器只输出原始状态 | 模拟器只做配置→data 映射与发布，无阈值/标签/结论逻辑；配置校验由后端 Literal 承担 |
 | 关闭重启可复现 | 按上文"关闭与重启复现"步骤（配置回 500 默认属预期） |
+
+## A00 阶段02：证据层（SQLite 双写 + 证据查询）
+
+### 数据库
+
+位置：`backend/campuspulse.db`（与 Day1 的 `runs` 表同一文件；被 .gitignore 忽略，重启后历史仍在）。
+每次数据库操作独立连接 + WAL 模式；建表幂等（`CREATE TABLE IF NOT EXISTS`）。
+
+建表 SQL：
+
+```sql
+CREATE TABLE IF NOT EXISTS observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    activity_id TEXT NOT NULL,
+    object_type TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS evidence (
+    evidence_id TEXT PRIMARY KEY,
+    activity_id TEXT NOT NULL,
+    object_type TEXT NOT NULL,
+    evidence_role TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source TEXT NOT NULL,
+    observed_at TEXT NULL,
+    retrieved_at TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('ok','unavailable','error')),
+    value_json TEXT NULL,
+    error_message TEXT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_ot_retr ON evidence(object_type, retrieved_at DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_ot_created ON observations(object_type, created_at DESC);
+```
+
+### 证据语义（重要）
+
+| 概念 | 含义 |
+|---|---|
+| `status` | **只表示本次取证是否成功**（ok / unavailable / error），不表示业务对象正常/异常 |
+| `value_json` | 只保存**成功取得**的业务事实；失败时为 null（不伪造业务值） |
+| `observed_at` | 业务状态被观察到的时间；失败时为 null（不伪造新时间），`retrieved_at` 为本次获取时间 |
+| 双写 | 成功消息 → 同一事务写 observations + evidence(status=ok)；失败消息 → 只写 evidence |
+| 最后成功值 | 取证失败期间，内存 store 与页面"最后成功确认"值保留上一次成功结果 |
+
+### 模拟 unavailable / error（手动测试）
+
+1. 正常模式下记下入口卡片值与 `/api/history/entrance` 的 count；
+2. 切失败：
+   ```
+   curl -X POST http://127.0.0.1:8000/api/sim/set -H "Content-Type: application/json" -d "{\"crowd\":500,\"entrance_available\":2,\"main_route\":\"normal\",\"support\":10,\"mode\":{\"entrance\":\"unavailable\"}}"
+   ```
+3. 观察（约 2~4s 后）：看板"证据追踪"区入口行 `最新获取` 变为灰色 unavailable 徽章（带 retrieved_at/来源/evidence_id）；入口卡片数值**保持最后成功值不变**；`/api/evidence/latest/entrance` 的 `status=unavailable、value_json=null、observed_at=null`；`/api/history/entrance` 的 count **不再增长**（无伪造 observations）；
+4. `mode.entrance` 改 `error` → 琥珀色徽章 + `error_message`；
+5. 改回 `"mode":{"entrance":"ok"}` → 双写恢复、卡片与"最后成功确认"行继续更新。
+
+完整演示流：`ok → unavailable → ok`。失败模式下每 2s 落一条失败证据属预期（每次取证尝试都记录；qos0 丢失下周期自愈）。
 
 ## 开发约定
 
