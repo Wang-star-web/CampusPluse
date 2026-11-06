@@ -8,7 +8,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ObjectType(str, Enum):
@@ -87,3 +87,29 @@ class SimConfig(BaseModel):
     main_route: Literal["normal", "limited"]
     support: Literal[8, 10, 12]
     mode: SimMode = SimMode()
+
+
+class TeachingConfig(BaseModel):
+    """阶段03 教学约束参数（独立 config.json 加载）。
+
+    只用于 CampusPulse 教学场景，不代表真实行业标准。
+    """
+
+    capacity: int = Field(gt=0)          # 场地容量
+    entrance_total: int = Field(gt=0)    # 入口总数（entrance_ratio 的分母）
+    support_reference: int = Field(gt=0) # 支持人员教学参考值
+
+
+class DerivedEntranceState(BaseModel):
+    """入口输入状态：available 为本次观察到可用入口数；total 为教学参数，来自 config。"""
+
+    available: int = Field(ge=0)
+
+
+class DerivedInput(BaseModel):
+    """POST /api/compute-derived 请求体：各对象最新有效业务状态（来自 observations）。"""
+
+    crowd: int = Field(ge=0)
+    entrance: DerivedEntranceState
+    main_route: Literal["normal", "limited"]
+    support: int = Field(ge=0)

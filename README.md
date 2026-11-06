@@ -2,6 +2,7 @@
 
 阶段01 打通：**模拟数据源 → MQTT → FastAPI 内存状态 → WebSocket → 浏览器最小看板**。
 阶段02 新增：**证据层** —— SQLite 双表（observations / evidence）双写、3 个证据查询接口、看板证据追踪区。
+阶段03 新增：**显式约束与派生结果** —— 独立教学配置 + `POST /api/compute-derived` 约束计算接口 + S1/S2 测试。
 
 页面展示 4 个对象的**原始业务数值**与**本次取证状态**（严格区分"最后成功确认的业务值"与
 "最新获取状态"）；各阶段刻意**不做**：态势计算、影响链、run_id。所有数据来自模拟器经 MQTT
@@ -206,6 +207,80 @@ CREATE INDEX IF NOT EXISTS idx_observations_ot_created ON observations(object_ty
 5. 改回 `"mode":{"entrance":"ok"}` → 双写恢复、卡片与"最后成功确认"行继续更新。
 
 完整演示流：`ok → unavailable → ok`。失败模式下每 2s 落一条失败证据属预期（每次取证尝试都记录；qos0 丢失下周期自愈）。
+
+## A00 阶段03：显式约束与派生结果
+
+### 教学配置（独立 config.json，教学参数，不是行业标准）
+
+```json
+{
+  "capacity": 1000,
+  "entrance_total": 2,
+  "support_reference": 10
+}
+```
+
+- 位置：`campuspulse/config.json`（后端每次计算时读取同一份参数；改文件即生效，无需重启）
+- 只用于 CampusPulse 教学场景，不代表真实活动行业标准
+- 文件缺失/非法时接口返回 500 并说明，绝不静默使用默认值
+
+### 约束计算逻辑（状态 + 证据 → 约束 → 派生结果）
+
+| 约束 | 公式 | 派生结果 |
+|---|---|---|
+| 人数容量 | remaining_capacity = capacity − crowd | remaining_capacity、remaining_capacity_ratio = remaining_capacity / capacity |
+| 入口 | entrance_ratio = available / total（total 取配置 entrance_total） | entrance_ratio |
+| 支持资源 | support_gap = support_reference − support（可为负） | support_gap、support_ratio = support / support_reference |
+| 路线 | main_route 映射（normal→normal；limited→reduced） | route_flexibility |
+
+⚠️ 本阶段只计算派生结果，**不生成局部影响与整体态势**（阶段04 再做）。
+
+### 接口 POST /api/compute-derived
+
+请求体（输入各对象最新有效业务状态，来自 observations）：
+
+```json
+{
+  "crowd": 300,
+  "entrance": { "available": 2 },
+  "main_route": "normal",
+  "support": 12
+}
+```
+
+响应体（config / states / derived 分层，不混层）：
+
+```json
+{
+  "activity_id": "campus_open_day_01",
+  "config": { "capacity": 1000, "entrance_total": 2, "support_reference": 10 },
+  "states": { "crowd": 300, "entrance": { "available": 2 }, "main_route": "normal", "support": 12 },
+  "derived": {
+    "capacity": { "remaining_capacity": 700, "remaining_capacity_ratio": 0.7 },
+    "entrance": { "entrance_ratio": 1.0 },
+    "support": { "support_gap": -2, "support_ratio": 1.2 },
+    "route": { "route_flexibility": "normal" }
+  },
+  "computed_at": "2026-11-06T04:00:00+00:00"
+}
+```
+
+非法输入（crowd<0 / main_route 非 normal|limited / 缺字段）→ 422。
+
+### 手动测试步骤（S1 / S2）
+
+**S1（稳定基线）**：
+```
+curl -X POST http://127.0.0.1:8000/api/compute-derived -H "Content-Type: application/json" -d '{"crowd":300,"entrance":{"available":2},"main_route":"normal","support":12}'
+```
+期望：remaining_capacity=700、ratio=0.70、entrance_ratio=1.00、support_gap=−2、route_flexibility=normal。
+
+**S2（约束逐步逼近）**：只改 crowd 300→500→650→750 重发四次，其余字段不变——
+remaining_capacity=700→500→350→250、ratio=0.70→0.50→0.35→0.25 持续变化；入口/路线/支持派生结果保持稳定。
+
+**现场验证值**：crowd=620 → 380/0.38；support 8→11 → support_gap 2→−1、support_ratio 0.80→1.10。
+
+**自动化测试**：`py -m tests.test_derived`（7 条：S1、S2 全序列、现场验证值×2、入口 1/2、路线映射、响应分层禁词守卫）。
 
 ## 开发约定
 

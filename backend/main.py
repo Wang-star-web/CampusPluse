@@ -284,6 +284,21 @@ def api_evidence_by_id(evidence_id: str):
     return {"evidence": row}
 
 
+# ---------- A00 阶段03：显式约束与派生结果（只算派生结果，禁止影响/态势/run_id） ----------
+from .constraints import compute_derived, load_config
+from .schemas import DerivedInput
+
+
+@app.post("/api/compute-derived")
+def api_compute_derived(states: DerivedInput):
+    """输入各对象最新有效业务状态（来自 observations），返回结构化派生结果。
+
+    派生结果由显式规则重新计算（不是场景文件写死答案）；响应只含 config/states/derived
+    三层，不生成局部影响与整体态势。
+    """
+    return compute_derived(states)
+
+
 @app.get("/{full_path:path}")
 def spa_fallback(full_path: str):
     """未知 GET 路径一律回退到看板页面（单页应用容错：/index.html、旧链接等不再 404）。
