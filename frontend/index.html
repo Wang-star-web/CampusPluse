@@ -7,87 +7,100 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230f1419'/%3E%3Cpath d='M4 16h6l3-7 6 14 3-7h6' stroke='%2358a6ff' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <script src="/static/vendor/three.min.js"></script>
 <style>
+  /* 浅色主题（2026-11-06 用户需求）：业务数值保持无着色语义，状态徽章只表达取证运营状态 */
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family:"PingFang SC","Microsoft YaHei",sans-serif; background:#0f1419; color:#e6e8eb; padding:24px; }
+  body { font-family:"PingFang SC","Microsoft YaHei",sans-serif; background:#f6f8fa; color:#1f2328; padding:24px; }
   .head { display:flex; align-items:center; gap:12px; margin-bottom:4px; flex-wrap:wrap; }
-  h1 { font-size:22px; }
-  .badge { font-size:12px; color:#8b949e; border:1px solid #30363d; border-radius:999px; padding:2px 10px; font-family:Consolas,monospace; }
-  .sub { color:#8b949e; font-size:13px; margin-bottom:20px; }
-  .status { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#8b949e; margin-left:auto; }
-  .status i { width:8px; height:8px; border-radius:50%; display:inline-block; background:#6e7681; }
-  .status.connected i { background:#58a6ff; }
+  h1 { font-size:22px; color:#1f2328; }
+  .badge { font-size:12px; color:#59636e; border:1px solid #d1d9e0; background:#ffffff; border-radius:999px; padding:2px 10px; font-family:Consolas,monospace; }
+  .sub { color:#59636e; font-size:13px; margin-bottom:20px; }
+  .status { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#59636e; margin-left:auto; }
+  .status i { width:8px; height:8px; border-radius:50%; display:inline-block; background:#8c959f; }
+  .status.connected i { background:#1a7f37; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
-  .card { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:16px; }
-  .card h3 { font-size:14px; color:#58a6ff; margin-bottom:10px; }
-  .value { font-size:32px; font-weight:700; }
-  .unit { font-size:12px; color:#6e7681; margin-top:2px; }
-  .meta { margin-top:10px; font-size:12px; color:#8b949e; line-height:1.8; font-family:Consolas,monospace; }
+  .card { background:#ffffff; border:1px solid #d1d9e0; border-radius:10px; padding:16px; box-shadow:0 1px 2px rgba(31,35,40,0.04); }
+  .card h3 { font-size:14px; color:#0969da; margin-bottom:10px; }
+  .value { font-size:32px; font-weight:700; color:#1f2328; }
+  .unit { font-size:12px; color:#8c959f; margin-top:2px; }
+  .meta { margin-top:10px; font-size:12px; color:#59636e; line-height:1.8; font-family:Consolas,monospace; }
   .card.flash { animation:flash .6s; }
-  @keyframes flash { 0% { border-color:#58a6ff; } 100% { border-color:#30363d; } }
-  .footer { margin-top:20px; font-size:12px; color:#8b949e; border-top:1px dashed #21262d; padding-top:12px; }
-  .hint { margin-bottom:20px; font-size:13px; color:#8b949e; background:#161b22; border:1px dashed #30363d; border-radius:10px; padding:10px 14px; }
-  .sit-section { margin-bottom:24px; background:#161b22; border:1px solid #30363d; border-radius:10px; padding:18px 20px; }
-  .sit-section h2 { font-size:16px; margin-bottom:10px; }
-  .sit-run { font-size:12px; color:#8b949e; font-family:Consolas,monospace; margin-bottom:10px; }
-  .sit-summary { font-size:22px; font-weight:700; margin-bottom:12px; }
+  @keyframes flash { 0% { border-color:#0969da; } 100% { border-color:#d1d9e0; } }
+  .footer { margin-top:20px; font-size:12px; color:#59636e; border-top:1px dashed #d1d9e0; padding-top:12px; }
+  .hint { margin-bottom:20px; font-size:13px; color:#59636e; background:#ffffff; border:1px dashed #d1d9e0; border-radius:10px; padding:10px 14px; }
+  .sit-section { margin-bottom:24px; background:#ffffff; border:1px solid #d1d9e0; border-radius:10px; padding:18px 20px; box-shadow:0 1px 2px rgba(31,35,40,0.04); }
+  .sit-section h2 { font-size:16px; margin-bottom:10px; color:#1f2328; }
+  .sit-run { font-size:12px; color:#59636e; font-family:Consolas,monospace; margin-bottom:10px; }
+  .sit-summary { font-size:22px; font-weight:700; margin-bottom:12px; color:#1f2328; }
   .sit-main { font-size:13px; }
-  .sit-impact { border-left:3px solid #d29922; background:#1c1a14; border-radius:6px; padding:8px 12px; margin-bottom:8px; cursor:pointer; }
-  .sit-impact .msg { color:#e6e8eb; }
-  .sit-impact .detail { display:none; margin-top:6px; font-size:12px; color:#8b949e; font-family:Consolas,monospace; line-height:1.8; }
+  .sit-impact { border-left:3px solid #d4a72c; background:#fff8e5; border-radius:6px; padding:8px 12px; margin-bottom:8px; cursor:pointer; }
+  .sit-impact .msg { color:#1f2328; }
+  .sit-impact .detail { display:none; margin-top:6px; font-size:12px; color:#59636e; font-family:Consolas,monospace; line-height:1.8; }
   .sit-impact.open .detail { display:block; }
-  .sit-none { color:#8b949e; font-size:13px; }
-  .evlink { color:#58a6ff; cursor:pointer; text-decoration:underline; }
-  .b-complete { color:#3fb950; }
-  .b-partial { color:#d29922; }
-  #trace-panel { margin-top:10px; font-size:12px; color:#8b949e; font-family:Consolas,monospace; line-height:1.8; }
-  .sit-refs { margin-top:10px; font-size:12px; color:#8b949e; font-family:Consolas,monospace; line-height:1.8; }
-  .role-note { color:#6e7681; }
-  #btn-run { background:#1f6feb; color:#fff; border:0; border-radius:8px; padding:8px 16px; cursor:pointer; font-size:13px; margin-top:12px; }
-  #run-status { margin-left:10px; font-size:12px; color:#8b949e; }
-  .sit-explain { margin-top:16px; border-top:1px dashed #30363d; padding-top:12px; }
-  .sit-explain h3 { font-size:13px; color:#8b949e; margin-bottom:8px; }
-  .btn2 { background:#21262d; color:#e6e8eb; border:1px solid #30363d; border-radius:8px; padding:6px 12px; cursor:pointer; font-size:12px; margin-right:8px; }
-  .btn2:hover { border-color:#58a6ff; }
-  #explain-q { background:#0f1419; color:#e6e8eb; border:1px solid #30363d; border-radius:8px; padding:6px 10px; font-size:12px; width:340px; max-width:70vw; margin-right:8px; }
-  #explain-out { margin-top:10px; font-size:13px; color:#c9d1d9; line-height:1.8; white-space:pre-wrap; }
-  #predict-status { font-size:12px; color:#8b949e; }
+  .sit-none { color:#59636e; font-size:13px; }
+  .evlink { color:#0969da; cursor:pointer; text-decoration:underline; }
+  .b-complete { color:#1a7f37; }
+  .b-partial { color:#9a6700; }
+  #trace-panel { margin-top:10px; font-size:12px; color:#59636e; font-family:Consolas,monospace; line-height:1.8; background:#f6f8fa; border:1px solid #d1d9e0; border-radius:6px; padding:8px 10px; }
+  .sit-refs { margin-top:10px; font-size:12px; color:#59636e; font-family:Consolas,monospace; line-height:1.8; }
+  .role-note { color:#8c959f; }
+  #btn-run { background:#0969da; color:#fff; border:0; border-radius:8px; padding:8px 16px; cursor:pointer; font-size:13px; margin-top:12px; }
+  #btn-run:hover { background:#0a5cc5; }
+  #run-status { margin-left:10px; font-size:12px; color:#59636e; }
+  .sit-explain { margin-top:16px; border-top:1px dashed #d1d9e0; padding-top:12px; }
+  .sit-explain h3 { font-size:13px; color:#59636e; margin-bottom:8px; }
+  .btn2 { background:#ffffff; color:#1f2328; border:1px solid #d1d9e0; border-radius:8px; padding:6px 12px; cursor:pointer; font-size:12px; margin-right:8px; }
+  .btn2:hover { border-color:#0969da; color:#0969da; }
+  #explain-q { background:#ffffff; color:#1f2328; border:1px solid #d1d9e0; border-radius:8px; padding:6px 10px; font-size:12px; width:340px; max-width:70vw; margin-right:8px; }
+  #explain-out { margin-top:10px; font-size:13px; color:#1f2328; line-height:1.8; white-space:pre-wrap; background:#f6f8fa; border:1px solid #d1d9e0; border-radius:8px; padding:10px 12px; }
+  #predict-status { font-size:12px; color:#59636e; }
   .toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
-  .toolbar label { font-size:13px; color:#8b949e; margin-right:4px; }
-  .preset { background:#161b22; color:#e6e8eb; border:1px solid #30363d; border-radius:8px; padding:6px 14px; cursor:pointer; font-size:13px; }
-  .preset:hover { border-color:#58a6ff; }
-  .preset.active { border-color:#58a6ff; color:#58a6ff; }
-  #preset-status { font-size:12px; color:#8b949e; }
+  .toolbar label { font-size:13px; color:#59636e; margin-right:4px; }
+  .preset { background:#ffffff; color:#1f2328; border:1px solid #d1d9e0; border-radius:8px; padding:6px 14px; cursor:pointer; font-size:13px; }
+  .preset:hover { border-color:#0969da; }
+  .preset.active { border-color:#0969da; color:#0969da; background:#ddf4ff; }
+  #preset-status { font-size:12px; color:#59636e; }
   .ev-section { margin-top:24px; }
   .ev-section h2 { font-size:16px; margin-bottom:12px; }
   .ev-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
-  .ev-block { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:14px; }
-  .ev-head { font-size:14px; color:#58a6ff; margin-bottom:8px; }
-  .ev-row { font-size:12px; color:#8b949e; line-height:1.7; font-family:Consolas,monospace; }
-  .ev-row b { color:#e6e8eb; }
-  /* 徽章色只表达"本次取数是否成功"（取证运营状态），绝不表达业务好坏；业务值一律无着色 */
-  .b-ok { color:#3fb950; }
-  .b-unavailable { color:#8b949e; }
-  .b-error { color:#d29922; }
-  .b-whatif { color:#bc8cff; }
-  .b-reality { color:#58a6ff; }
+  .ev-block { background:#ffffff; border:1px solid #d1d9e0; border-radius:10px; padding:14px; box-shadow:0 1px 2px rgba(31,35,40,0.04); }
+  .ev-head { font-size:14px; color:#0969da; margin-bottom:8px; }
+  .ev-row { font-size:12px; color:#59636e; line-height:1.7; font-family:Consolas,monospace; }
+  .ev-row b { color:#1f2328; }
+  /* 状态药丸：只表达"本次取数是否成功"（取证运营状态），绝不表达业务好坏；业务值一律无着色 */
+  .pill { display:inline-block; padding:1px 10px; border-radius:999px; font-size:11px; }
+  .pill-ok { background:#dafbe1; color:#1a7f37; }
+  .pill-unavailable { background:#eaeef2; color:#59636e; }
+  .pill-error { background:#fff8c5; color:#9a6700; }
+  .pill-whatif { background:#fbefff; color:#8250df; }
+  .pill-reality { background:#ddf4ff; color:#0969da; }
+  .b-ok { color:#1a7f37; }
+  .b-unavailable { color:#59636e; }
+  .b-error { color:#9a6700; }
+  .b-whatif { color:#8250df; }
+  .b-reality { color:#0969da; }
   .view3 { margin-top:24px; }
-  .view3 h2, .view4 h2, .venue-section h2 { font-size:16px; margin-bottom:12px; }
-  .ev-role { margin-bottom:14px; }
-  .ev-role h4 { font-size:13px; color:#58a6ff; margin-bottom:6px; }
-  .ev-item { font-size:12px; color:#8b949e; font-family:Consolas,monospace; padding:3px 0; border-bottom:1px dashed #21262d; }
+  .view3 h2, .view4 h2, .venue-section h2 { font-size:16px; margin-bottom:12px; color:#1f2328; }
+  .role-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
+  .role-card { background:#ffffff; border:1px solid #d1d9e0; border-top:3px solid #0969da; border-radius:10px; padding:14px; box-shadow:0 1px 2px rgba(31,35,40,0.04); }
+  .role-card h4 { font-size:13px; color:#1f2328; margin-bottom:6px; }
+  .ev-stat { display:flex; gap:8px; align-items:center; font-size:12px; margin-bottom:8px; }
+  .ev-item { font-size:12px; color:#59636e; font-family:Consolas,monospace; padding:4px 0; border-bottom:1px dashed #eaeef2; }
   .view4 { margin-top:24px; }
-  .run-row { font-size:12px; color:#8b949e; font-family:Consolas,monospace; padding:5px 0; border-bottom:1px dashed #21262d; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-  .run-row .btn2 { margin-right:0; }
-  .cmp-table { margin-top:8px; font-size:12px; font-family:Consolas,monospace; }
-  .cmp-table .chg { color:#d29922; }
-  .cmp-table .same { color:#8b949e; }
-  .whatif-form { margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  .whatif-form input, .whatif-form select { background:#0f1419; color:#e6e8eb; border:1px solid #30363d; border-radius:8px; padding:6px 8px; font-size:12px; }
+  .run-card { background:#ffffff; border:1px solid #d1d9e0; border-radius:8px; padding:8px 12px; margin-bottom:8px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-family:Consolas,monospace; font-size:12px; color:#59636e; box-shadow:0 1px 2px rgba(31,35,40,0.03); }
+  .run-card.reality { border-left:3px solid #0969da; }
+  .run-card.whatif { border-left:3px solid #8250df; }
+  .run-card .btn2 { margin-right:0; }
+  .cmp-table { margin-top:8px; font-size:12px; font-family:Consolas,monospace; background:#ffffff; border:1px solid #d1d9e0; border-radius:8px; padding:12px; }
+  .cmp-table .chg { color:#9a6700; background:#fff8e5; border-radius:4px; padding:2px 6px; margin:2px 0; }
+  .cmp-table .same { color:#59636e; padding:2px 6px; }
+  .cmp-sec { margin-top:8px; font-weight:700; color:#1f2328; }
+  .whatif-form { margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; background:#ffffff; border:1px solid #d1d9e0; border-radius:8px; padding:10px 12px; }
+  .whatif-form input, .whatif-form select { background:#f6f8fa; color:#1f2328; border:1px solid #d1d9e0; border-radius:8px; padding:6px 8px; font-size:12px; }
   .venue-section { margin:24px 0; }
-  .venue-wrap { background:#0a0d11; border:1px solid #30363d; border-radius:10px; overflow:hidden; }
+  .venue-wrap { background:#0a0d11; border:1px solid #d1d9e0; border-radius:10px; overflow:hidden; }
   #venue-canvas { width:100%; height:340px; display:block; }
   #venue-svg { width:100%; height:340px; display:block; }
-  .venue-note { font-size:12px; color:#6e7681; margin-top:6px; }
+  .venue-note { font-size:12px; color:#8c959f; margin-top:6px; }
 </style>
 </head>
 <body>
@@ -587,9 +600,11 @@ function venueFromLatest() {
 }
 if (window.THREE) { initVenue3D(); } else { venueMode = 'svg'; renderVenueSVG(); document.getElementById('venue-canvas').style.display = 'none'; }
 
-// ---------- 视图三：证据与运行（按角色分组） ----------
+// ---------- 视图三：证据与运行（按角色分组卡片） ----------
 const ROLE_LABELS = { current_fact: '当前事实 current_fact', future_condition: '未来条件 future_condition',
                       knowledge_basis: '知识依据 knowledge_basis', model_output: '模型预测 model_output' };
+const ROLE_ICONS = { current_fact: '📌', future_condition: '🌦️', knowledge_basis: '📚', model_output: '🤖' };
+const ROLE_COLORS = { current_fact: '#0969da', future_condition: '#9a6700', knowledge_basis: '#1a7f37', model_output: '#8250df' };
 document.getElementById('btn-load-ev').addEventListener('click', async () => {
   const st = document.getElementById('ev3-status');
   st.textContent = '加载中…';
@@ -598,21 +613,24 @@ document.getElementById('btn-load-ev').addEventListener('click', async () => {
     const groups = { current_fact: [], future_condition: [], knowledge_basis: [], model_output: [] };
     for (const e of body.evidence) if (groups[e.evidence_role]) groups[e.evidence_role].push(e);
     const box = document.getElementById('ev3-roles');
+    box.className = 'role-grid';
     box.innerHTML = '';
     for (const [role, list] of Object.entries(groups)) {
-      const h = document.createElement('h4');
-      h.textContent = `${ROLE_LABELS[role]}（${list.length} 条）`;
+      const okN = list.filter(e => e.status === 'ok').length;
+      const unavN = list.filter(e => e.status === 'unavailable').length;
+      const errN = list.filter(e => e.status === 'error').length;
       const d = document.createElement('div');
-      d.className = 'ev-role';
-      d.appendChild(h);
+      d.className = 'role-card';
+      d.style.borderTopColor = ROLE_COLORS[role] || '#0969da';
+      d.innerHTML = `<h4>${ROLE_ICONS[role]} ${ROLE_LABELS[role]} <span class="pill" style="background:#eaeef2;color:#59636e;">${list.length} 条</span></h4>
+        <div class="ev-stat"><span class="pill pill-ok">✅ ok ${okN}</span><span class="pill pill-unavailable">⚠️ unavailable ${unavN}</span><span class="pill pill-error">⛔ error ${errN}</span></div>`;
       for (const e of list.slice(0, 12)) {
-        const badge = BADGE[e.status] || esc(e.status);
         const val = e.value_json
           ? Object.entries(e.value_json).slice(0, 3).map(([k, v]) => `${esc(k)}=${esc(typeof v === 'object' ? JSON.stringify(v).slice(0, 40) : v)}`).join(' ')
           : 'null';
         const row = document.createElement('div');
         row.className = 'ev-item';
-        row.innerHTML = `${esc(e.evidence_id)} · ${badge} · ${esc(e.source_type)} · ${esc(e.source)} · ${esc((e.retrieved_at || '').slice(11, 19))} · ${val}`;
+        row.innerHTML = `🆔 ${esc(e.evidence_id)} · <span class="pill pill-${esc(e.status)}">${esc(e.status)}</span> · ${esc(e.source_type)} · ${esc(e.source)} · 🕐 ${esc((e.retrieved_at || '').slice(11, 19))}<br>${val}`;
         d.appendChild(row);
       }
       box.appendChild(d);
@@ -640,9 +658,10 @@ async function loadRuns() {
     box.innerHTML = '';
     for (const r of runsCache) {
       const div = document.createElement('div');
-      div.className = 'run-row';
-      const typeBadge = r.run_type === 'what_if' ? '<span class="b-whatif">what_if</span>' : '<span class="b-reality">reality</span>';
-      div.innerHTML = `${typeBadge} <span>${esc(r.run_id)}</span> <span>${esc(r.scenario_id || '-')}</span> <span>${esc((r.created_at || '').slice(11, 19))}</span> ${r.parent_run_id ? `<span>父: ${esc(r.parent_run_id)}</span>` : ''}`;
+      div.className = 'run-card ' + r.run_type;
+      div.innerHTML = `<span class="pill ${r.run_type === 'what_if' ? 'pill-whatif' : 'pill-reality'}">${r.run_type === 'what_if' ? '🧪 what_if' : '🌍 reality'}</span>
+        <span>🆔 ${esc(r.run_id)}</span><span>🎬 ${esc(r.scenario_id || '-')}</span><span>🕐 ${esc((r.created_at || '').slice(11, 19))}</span>
+        ${r.parent_run_id ? `<span>⬅️ 父: ${esc(r.parent_run_id)}</span>` : ''}`;
       const bView = document.createElement('button'); bView.className = 'btn2'; bView.textContent = '查看';
       bView.onclick = async () => { renderRun(await (await fetch('/api/runs/' + r.run_id)).json()); };
       div.appendChild(bView);
@@ -671,14 +690,14 @@ function renderCompare(aId, bId) {
     const chgDerived = cmp.derived_diff.filter(d => d.changed);
     const chgImpact = cmp.impact_diff.filter(d => d.changed);
     out.innerHTML = `<div class="cmp-table">
-      <div>对比 ${esc(cmp.run_a.run_id)} (${esc(cmp.run_a.run_type)}) ← ${esc(cmp.run_b.run_id)} (${esc(cmp.run_b.run_type)})</div>
-      <div style="margin-top:6px;"><b>输入差异</b>${chgInput.length ? '' : '（无）'}</div>
+      <div style="font-size:13px;">🔍 对比 <b>${esc(cmp.run_a.run_id)}</b>（🌍 ${esc(cmp.run_a.run_type)}） ← <b>${esc(cmp.run_b.run_id)}</b>（🧪 ${esc(cmp.run_b.run_type)}）</div>
+      <div class="cmp-sec">📥 输入差异${chgInput.length ? '' : '（无）'}</div>
       ${chgInput.map(d => `<div class="chg">${esc(d.key)}: ${fmtState(d.a)} → ${fmtState(d.b)}</div>`).join('')}
-      <div style="margin-top:6px;"><b>派生结果差异</b>${chgDerived.length ? '' : '（无）'}</div>
+      <div class="cmp-sec">🧮 派生结果差异${chgDerived.length ? '' : '（无）'}</div>
       ${chgDerived.map(d => `<div class="chg">${esc(d.key)}: ${fmtState(d.a)} → ${fmtState(d.b)}</div>`).join('')}
-      <div style="margin-top:6px;"><b>局部影响差异</b>${chgImpact.length ? '' : '（无）'}</div>
+      <div class="cmp-sec">💥 局部影响差异${chgImpact.length ? '' : '（无）'}</div>
       ${chgImpact.map(d => `<div class="chg">${esc(d.impact_type)}: ${esc(d.a)} → ${esc(d.b)}</div>`).join('')}
-      <div style="margin-top:6px;"><b>整体态势差异</b></div>
+      <div class="cmp-sec">🧭 整体态势差异</div>
       <div class="${cmp.situation_diff.summary.changed ? 'chg' : 'same'}">summary: ${esc(cmp.situation_diff.summary.a)} → ${esc(cmp.situation_diff.summary.b)}</div>
       <div class="${cmp.situation_diff.completeness.changed ? 'chg' : 'same'}">completeness: ${esc(cmp.situation_diff.completeness.a)} → ${esc(cmp.situation_diff.completeness.b)}</div>
       <div class="${cmp.situation_diff.unknown_items.changed ? 'chg' : 'same'}">unknown: ${esc(JSON.stringify(cmp.situation_diff.unknown_items.a))} → ${esc(JSON.stringify(cmp.situation_diff.unknown_items.b))}</div>
