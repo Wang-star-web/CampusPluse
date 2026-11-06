@@ -516,6 +516,81 @@ LLM_MODEL=deepseek-chat
 **自动化测试**：`py -m tests.test_predict`（6 条：趋势外推、数据不足、无泄漏、prompt 五条硬边界、
 上下文只含结构化结果、S4 model_output 引用分层）；全量回归 30/30。
 
+## A00 阶段07：条件推演 what-if、父子 run、S5 可信降级
+
+### 硬约束
+
+- `run_type` 只取 reality / what_if；what-if 必须携带 `parent_run_id`、`input_overrides_json`、
+  `assumptions_json`（至少含 `other_conditions_unchanged: true`）；**what-if 生成全新 run_id，
+  绝不修改/覆盖父 run**（runs 表只有 INSERT/SELECT）
+- 取证失败 status=unavailable → 标记 unknown_items；**unknown ≠ 业务异常**，绝不编造业务状态
+- 两条链不能混：改条件 → what-if 新运行；丢证据 → reality 新运行（可信降级）
+
+### 数据库字段（阶段07 追加两列，旧 run 行不受影响）
+
+```sql
+ALTER TABLE runs ADD COLUMN input_overrides_json TEXT NULL;
+ALTER TABLE runs ADD COLUMN assumptions_json TEXT NULL;
+```
+
+### 接口
+
+- `POST /api/runs/{parent_run_id}/what-if` — 请求体 `{"overrides": {crowd?/entrance_available?/main_route?/support?}, "assumptions": "可选说明"}`；
+  基于父 run 快照只改有限输入、其余继承（含证据引用），**完整重跑 约束→派生→impact→态势 链**，返回新 run_id
+- `GET /api/runs/{run_id}/compare/{other_run_id}` — 五维对比：输入差异 / 派生结果差异 / impact 差异 /
+  态势差异（summary/completeness/unknown_items）；只列变化项 + 逐项 a→b
+- `GET /api/runs?limit=30` — 运行列表（reality/what_if、父子关系）；`GET /api/evidence?limit=200` — 证据列表（视图三）
+
+### S5 可信降级语义
+
+- 路线：`states.main_route = null` 表示"本次路线事实无法确认"→ derived `route_flexibility=unknown`、
+  impact="路线条件无法确认（本次取证失败）"、affected_impacts += route_impact、unknown_items += route_current_state；
+  业务状态绝不写成 blocked/unavailable
+- 天气：evidence_refs 可引用 status=unavailable 的 future_condition 证据（记录"这次没拿到"）→
+  unknown_items += weather_future_condition、affected_impacts += future_route_impact
+- summary 规则新增：有受影响判断时 → "…，部分影响判断不完整（证据不完整）"
+- situation_completeness：complete / partial（只两值，无百分比）
+
+### 前端
+
+- **场地视图（3D）**：Three.js（本地 vendor，无其他第三方库）——场地平面 + 入口立体块 + 拥堵色阶 +
+  简单动画（缓慢自转/拖拽视角/受限入口脉冲）；**3D 不参与计算**，只呈现最新 run 已算出的
+  remaining_capacity_ratio 与实时原始状态；Three.js 加载失败自动降级 2D SVG（同一份数据）
+- **视图三 证据与运行**：按 evidence_role 分组展示全部证据（current_fact/future_condition/
+  knowledge_basis/model_output）+ status 徽章 + 来源时间 + 当前运行 unknown_items
+- **视图四 场景回放与条件推演**：运行列表（reality/what_if/父子标注）、查看、对比父运行、
+  覆盖表单生成 what-if（留空=继承父运行）、前后对比展示
+
+### S4-D 对照与 S5 手动测试步骤
+
+**S4-C 基准 + S4-D 推演（PowerShell；服务在跑时直接执行）**：
+```powershell
+# 1) S4-C reality 基准（900 / 1-2 / limited / 8 + 天气/RAG 证据）——用阶段06 的 S4 整段脚本生成，得到 $run.run_id
+# 2) S4-D what-if：入口恢复 2/2（支持仍 8）
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/runs/$($run.run_id)/what-if" -Method Post -ContentType 'application/json' -Body '{"overrides":{"entrance_available":2},"assumptions":"假设入口恢复"}'
+# 3) 对比
+Invoke-RestMethod "http://127.0.0.1:8000/api/runs/$($run.run_id)/compare/<whatif_run_id>"
+```
+期望：S4-C summary=组织压力上升；S4-D 为 what_if、parent 指向 S4-C、entrance impact 变"入口条件稳定"、
+支持/容量/路线影响保留；对比里 input_diff 只有 entrance、derived 只有 entrance_ratio、impact 只有 entrance 变化；
+**父 run 快照原样可查（未被覆盖）**。（S4-A/B 同理：A=overrides {entrance_available:2, support:10}；B={support:10}。）
+
+**S5 信息退化**：
+1. 改 `.env`：`WEATHER_TEACHING_CONDITION=unavailable` + 加 `ROUTE_TOOL_TEACHING_UNAVAILABLE=1`，重启后端
+2. `POST /api/tools/weather` → status=unavailable（value_json=null）；`POST /api/tools/route` → unavailable；
+   `POST /api/tools/rag`（强降雨）→ no_match（status=ok，不算失败）
+3. 提交 S5 reality 运行：states 的 main_route 填 null（PowerShell：`main_route=$null`），
+   evidence_refs 含 crowd/entrance/support 的 ok 证据 + 天气 unavailable 证据 + RAG no_match 证据
+4. 验证：unknown_items=[route_current_state, weather_future_condition]、
+   affected_impacts=[future_route_impact, route_impact]、completeness=partial、
+   main_impacts 仅 [capacity, entrance, support]（仍有证据的部分继续计算）、
+   summary 含"部分影响判断不完整（证据不完整）"、全文无 blocked/异常；
+   `/api/current` 的 main_route 业务状态仍是 normal（取证失败 ≠ 业务异常）
+5. 恢复 `.env`（heavy_rain_expected、去掉 ROUTE_TOOL_TEACHING_UNAVAILABLE）重启
+
+**自动化测试**：`py -m tests.test_whatif`（5 条：S4 基准、S4-D 恢复入口、S4-A 起点、S5 双未知、
+what-if 落库与父行不可覆盖）；全量回归 **41/41**。
+
 ## 开发约定
 
 - 代码为本项目新写，基于已学能力迁移式实现（多站点并列判定思路 → 多对象状态并行采集）。

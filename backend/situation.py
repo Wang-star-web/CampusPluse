@@ -42,11 +42,12 @@ def _capacity(ratio: float) -> tuple[str, bool]:
     return CAPACITY_MESSAGES["low"], True
 
 
-def build_impacts(derived: dict) -> tuple[list[dict], list[dict]]:
-    """派生结果 → 4 条局部影响。返回 (全部 impacts, main_impacts)。
+def build_impacts(derived: dict) -> tuple[list[dict], list[dict], list[str]]:
+    """派生结果 → 4 条局部影响。返回 (全部 impacts, main_impacts, affected_impacts)。
 
     每条 impact 可追溯：impact_type → source_constraint（哪条约束）→
     source_derived_result（哪项派生结果）→ message（教学文案）。
+    affected_impacts（阶段07）：证据缺失导致判断不完整的影响名（如 route_impact）。
     """
     cap = derived["capacity"]
     cap_msg, cap_attn = _capacity(cap["remaining_capacity_ratio"])
@@ -60,8 +61,13 @@ def build_impacts(derived: dict) -> tuple[list[dict], list[dict]]:
     sup_attn = sup < 1.0
 
     rt = derived["route"]["route_flexibility"]
-    rt_msg = "路线条件稳定" if rt == "normal" else "路线灵活性下降"
-    rt_attn = rt == "reduced"
+    if rt == "unknown":
+        # 阶段07 S5：路线取证失败 → 本次路线事实无法确认（未知 ≠ 异常）
+        rt_msg = "路线条件无法确认（本次取证失败）"
+        rt_attn = False
+    else:
+        rt_msg = "路线条件稳定" if rt == "normal" else "路线灵活性下降"
+        rt_attn = rt == "reduced"
 
     impacts = [
         {"impact_id": "impact_capacity", "impact_type": "capacity",
@@ -82,22 +88,26 @@ def build_impacts(derived: dict) -> tuple[list[dict], list[dict]]:
          "message": rt_msg},
     ]
     main_impacts = [i for i, attn in zip(impacts, (cap_attn, ent_attn, sup_attn, rt_attn)) if attn]
-    return impacts, main_impacts
+    affected = ["route_impact"] if rt == "unknown" else []
+    return impacts, main_impacts, affected
 
 
 def build_situation(impacts: list[dict], main_impacts: list[dict],
-                    unknown_items: list[str], capacity_ratio: float) -> dict:
+                    unknown_items: list[str], capacity_ratio: float,
+                    affected_impacts: list[str] | None = None) -> dict:
     """聚合全部影响生成整体态势（有限教学聚合规则，非总分、非等级）。
 
     summary 规则（可解释归纳）：
     - 无需要关注的影响 → "当前主要条件稳定"
-    - 有 → 各影响简短标签以"、"连接；若未全部命中，追加"，其他主要条件保持稳定"
-    - 四类影响全部命中（S4 多因素场景）→ 案例书冻结文案"组织压力上升"
+    - 四类影响全部命中且无受影响判断（S4 多因素场景）→ 案例书冻结文案"组织压力上升"
       （教学用态势标签，不等同于专业安全评估结论）
+    - 有受影响判断（阶段07 S5 证据退化）→ 标签连接 + "，部分影响判断不完整（证据不完整）"
+    - 其余 → 标签连接 + "，其他主要条件保持稳定"（未全部命中时）
     """
+    affected_impacts = affected_impacts or []
     if not main_impacts:
         summary = "当前主要条件稳定"
-    elif len(main_impacts) == len(impacts):
+    elif len(main_impacts) == len(impacts) and not affected_impacts:
         summary = "组织压力上升"  # S4 golden 冻结文案
     else:
         labels = []
@@ -109,12 +119,15 @@ def build_situation(impacts: list[dict], main_impacts: list[dict],
             else:
                 labels.append(SUMMARY_LABELS[t])
         summary = "、".join(labels)
-        if len(main_impacts) < len(impacts):
+        if affected_impacts:
+            summary += "，部分影响判断不完整（证据不完整）"
+        elif len(main_impacts) < len(impacts):
             summary += "，其他主要条件保持稳定"
 
     return {
         "summary": summary,
         "main_impacts": main_impacts,
+        "affected_impacts": affected_impacts,
         "unknown_items": unknown_items,
-        "situation_completeness": "complete" if not unknown_items else "partial",
+        "situation_completeness": "complete" if not (unknown_items or affected_impacts) else "partial",
     }

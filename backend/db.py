@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS runs (
     run_type TEXT NOT NULL CHECK(run_type IN ('reality','what_if')),
     parent_run_id TEXT NULL,
     input_snapshot_json TEXT NOT NULL,
+    input_overrides_json TEXT NULL,
+    assumptions_json TEXT NULL,
     evidence_refs_json TEXT NOT NULL,
     derived_results_json TEXT NOT NULL,
     impacts_json TEXT NOT NULL,
@@ -66,6 +68,9 @@ CREATE TABLE IF NOT EXISTS runs (
     completed_at TEXT NOT NULL
 );
 """
+
+# 阶段07 追加列（对已存在的阶段04 新结构 runs 表做 ALTER 迁移）
+RUN_STAGE7_ADD_COLUMNS = ["input_overrides_json", "assumptions_json"]
 
 # 阶段06 LLM 解释单独存表（禁止写回 runs 的 situation/impacts 等任何字段）
 EXPLANATIONS_TABLE_SQL = """
@@ -106,6 +111,12 @@ def _ensure_runs_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE runs RENAME TO runs_legacy")
         conn.executescript(RUNS_TABLE_SQL)
         conn.commit()
+        return
+    # 阶段04 新结构 → 补齐阶段07 追加列（可空；旧 run 行不受影响，永不 UPDATE）
+    for col in RUN_STAGE7_ADD_COLUMNS:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT NULL")
+    conn.commit()
 
 
 def connect() -> sqlite3.Connection:
@@ -267,26 +278,35 @@ def query_evidence(evidence_id: str) -> dict | None:
 # 现实变化或条件变化 → 生成全新 run_id，旧运行永远可重新打开。
 
 _RUN_COLS = ("run_id", "scenario_id", "run_type", "parent_run_id", "input_snapshot_json",
-             "evidence_refs_json", "derived_results_json", "impacts_json",
-             "situation_json", "unknown_items_json", "situation_completeness",
-             "created_at", "completed_at")
+             "input_overrides_json", "assumptions_json", "evidence_refs_json",
+             "derived_results_json", "impacts_json", "situation_json",
+             "unknown_items_json", "situation_completeness", "created_at", "completed_at")
 
-_JSON_FIELDS = {"input_snapshot_json": "input_snapshot", "evidence_refs_json": "evidence_refs",
+_JSON_FIELDS = {"input_snapshot_json": "input_snapshot", "input_overrides_json": "input_overrides",
+                "assumptions_json": "assumptions", "evidence_refs_json": "evidence_refs",
                 "derived_results_json": "derived_results", "impacts_json": "impacts",
                 "situation_json": "situation", "unknown_items_json": "unknown_items"}
 
 
 def insert_run(snap: dict) -> None:
-    """写入一条完整运行记录（run_type=reality，parent_run_id=null）。"""
+    """写入一条完整运行记录（只 INSERT 不 UPDATE；run_type=reality|what_if）。
+
+    what-if 必须携带 parent_run_id 与 input_overrides（assumptions 至少含
+    other_conditions_unchanged 标记）；reality 这两项为 null。
+    """
     conn = connect()
     try:
         conn.execute(
             "INSERT INTO runs (run_id, scenario_id, run_type, parent_run_id, input_snapshot_json,"
-            " evidence_refs_json, derived_results_json, impacts_json, situation_json,"
-            " unknown_items_json, situation_completeness, created_at, completed_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (snap["run_id"], snap.get("scenario_id"), "reality", None,
+            " input_overrides_json, assumptions_json, evidence_refs_json, derived_results_json,"
+            " impacts_json, situation_json, unknown_items_json, situation_completeness,"
+            " created_at, completed_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (snap["run_id"], snap.get("scenario_id"), snap.get("run_type", "reality"),
+             snap.get("parent_run_id"),
              json.dumps(snap["input_snapshot"], ensure_ascii=False),
+             json.dumps(snap["input_overrides"], ensure_ascii=False) if snap.get("input_overrides") is not None else None,
+             json.dumps(snap["assumptions"], ensure_ascii=False) if snap.get("assumptions") is not None else None,
              json.dumps(snap["evidence_refs"], ensure_ascii=False),
              json.dumps(snap["derived_results"], ensure_ascii=False),
              json.dumps(snap["impacts"], ensure_ascii=False),
@@ -328,6 +348,33 @@ def query_latest_run() -> dict | None:
             f"SELECT {', '.join(_RUN_COLS)} FROM runs"
             " WHERE run_type IS NOT NULL ORDER BY created_at DESC, run_id DESC LIMIT 1").fetchone()
         return _parse_run_row(row)
+    finally:
+        conn.close()
+
+
+# ---------- 阶段07：运行列表 / 证据列表查询 ----------
+
+def query_run_list(limit: int = 20) -> list[dict]:
+    """最近运行列表（视图四：父子 run 展示；只含正式阶段04+ 行）。"""
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT run_id, scenario_id, run_type, parent_run_id, created_at"
+            " FROM runs WHERE run_type IS NOT NULL ORDER BY created_at DESC, run_id DESC LIMIT ?",
+            (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def query_evidence_list(limit: int = 100) -> list[dict]:
+    """最近证据列表（视图三：按角色分组展示）。"""
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM evidence ORDER BY retrieved_at DESC, evidence_id DESC LIMIT ?",
+            (limit,)).fetchall()
+        return [_parse_row(r) for r in rows]
     finally:
         conn.close()
 

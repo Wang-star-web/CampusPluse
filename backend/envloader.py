@@ -13,7 +13,14 @@ _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 def load_dotenv() -> None:
     if not _ENV_PATH.exists():
         return
-    for line in _ENV_PATH.read_text(encoding="utf-8").splitlines():
+    # 容错：.env 可能被 Windows 工具（PowerShell Set-Content / sed）写成 GBK——
+    # 先按 UTF-8 读，失败按 GBK 解码
+    raw = _ENV_PATH.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("gbk", errors="ignore")
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue

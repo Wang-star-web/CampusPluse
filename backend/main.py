@@ -290,40 +290,78 @@ from .schemas import RunRequest
 from .situation import IMPACT_TO_OBJECT, build_impacts, build_situation
 
 
-@app.post("/api/runs")
-def api_create_run(req: RunRequest):
-    """完整分析：输入状态+证据引用 → 约束 → 派生结果 → impacts → situation → 新 run_id 落库。
+def _resolve_refs(ref_ids: list[str]) -> tuple[dict, list[str]]:
+    """证据 id 列表 → 引用映射 {key: {"evidence_id", "status"}} 与校验错误列表。
 
-    只做 reality（run_type=reality, parent_run_id=null）；what-if 属阶段07。
-    situation/summary 全部由 Python 教学规则生成，LLM 不参与判定。
-    完成后的 run 永不 UPDATE——新输入必然生成全新 run_id。
+    键 = evidence_role（非 current_fact）或 object_type（current_fact）。
+    status != ok 的引用只允许 future_condition（天气取证失败必须被记录，
+    由管线转为 unknown_items）；其余失败引用 → 错误（422）。
     """
-    refs = {}  # 键 = evidence_role（非 current_fact 外部证据）或 object_type（current_fact）
-    for eid in req.evidence_refs:
+    refs: dict[str, dict] = {}
+    errors: list[str] = []
+    for eid in ref_ids:
         ev = query_evidence(eid)
         if ev is None:
-            raise HTTPException(status_code=422, detail=f"evidence not found: {eid}")
-        if ev["status"] != "ok":
-            raise HTTPException(status_code=422, detail=f"evidence not ok: {eid} (status={ev['status']})")
+            errors.append(f"evidence not found: {eid}")
+            continue
         key = ev["object_type"] if ev["evidence_role"] == "current_fact" else ev["evidence_role"]
-        refs[key] = eid
+        if ev["status"] != "ok" and ev["evidence_role"] != "future_condition":
+            errors.append(f"evidence not ok: {eid} (status={ev['status']}, role={ev['evidence_role']})")
+            continue
+        refs[key] = {"evidence_id": eid, "status": ev["status"]}
+    return refs, errors
 
-    derived = compute_derived(req.states)
-    impacts, main_impacts = build_impacts(derived["derived"])
-    unknown_items = sorted(set(IMPACT_TO_OBJECT.values()) - set(refs))
+
+def _normalize_refs(refs: dict) -> dict:
+    """兼容阶段04/05 旧行（值为字符串）与新条目（值为 {evidence_id, status}）。"""
+    out = {}
+    for k, v in refs.items():
+        out[k] = v if isinstance(v, dict) else {"evidence_id": v, "status": "ok"}
+    return out
+
+
+def _run_pipeline(states: DerivedInput, refs_entries: dict, scenario_id: str | None,
+                  run_type: str = "reality", parent_run_id: str | None = None,
+                  overrides: dict | None = None, assumptions: dict | None = None) -> dict:
+    """完整分析链（reality 与 what-if 共用）：约束 → 派生 → impacts → situation → 落库。
+
+    阶段07：unknown_items / affected_impacts / situation_completeness 由显式规则生成；
+    只 INSERT 不 UPDATE——现实/推演各自全新 run_id。
+    """
+    derived = compute_derived(states)
+    impacts, main_impacts, route_affected = build_impacts(derived["derived"])
+
+    unknown_items: list[str] = []
+    affected: list[str] = list(route_affected)
+    refs_norm = _normalize_refs(refs_entries)
+    for key, entry in refs_norm.items():
+        if entry["status"] != "ok" and key == "future_condition":
+            unknown_items.append("weather_future_condition")   # 天气取证失败 → 未来条件未知
+            affected.append("future_route_impact")
+    for ot in ("crowd", "entrance", "support"):                 # 缺失 current_fact 引用 → 未知
+        if ot not in refs_norm:
+            unknown_items.append(ot)
+    if states.main_route is None:                               # 本次路线事实无法确认（未知 ≠ 异常）
+        unknown_items.append("route_current_state")
+    elif "main_route" not in refs_norm:
+        unknown_items.append("main_route")
+    unknown_items = sorted(set(unknown_items))
+    affected = sorted(set(affected))
+
     situation = build_situation(impacts, main_impacts, unknown_items,
-                                derived["derived"]["capacity"]["remaining_capacity_ratio"])
+                                derived["derived"]["capacity"]["remaining_capacity_ratio"], affected)
 
     now = _dt.now(_tz.utc).isoformat()
     run_id = f"run-{_dt.now():%Y%m%d-%H%M%S}-{_uuid.uuid4().hex[:6]}"
     insert_run({
         "run_id": run_id,
-        "scenario_id": req.scenario_id,
-        "input_snapshot": {
-            "states": derived["states"],
-            "config": derived["config"],
-        },
-        "evidence_refs": refs,
+        "scenario_id": scenario_id,
+        "run_type": run_type,
+        "parent_run_id": parent_run_id,
+        "input_snapshot": {"states": derived["states"], "config": derived["config"]},
+        "input_overrides": overrides,
+        "assumptions": assumptions,
+        "evidence_refs": refs_norm,
         "derived_results": derived["derived"],
         "impacts": impacts,
         "situation": situation,
@@ -333,6 +371,19 @@ def api_create_run(req: RunRequest):
         "completed_at": now,
     })
     return {"run_id": run_id}
+
+
+@app.post("/api/runs")
+def api_create_run(req: RunRequest):
+    """完整分析：输入状态+证据引用 → 约束 → 派生结果 → impacts → situation → 新 run_id 落库。
+
+    reality 运行（run_type=reality, parent_run_id=null）；situation/summary 全部由
+    Python 教学规则生成，LLM 不参与判定。完成后的 run 永不 UPDATE。
+    """
+    refs, errors = _resolve_refs(req.evidence_refs)
+    if errors:
+        raise HTTPException(status_code=422, detail="; ".join(errors))
+    return _run_pipeline(req.states, refs, req.scenario_id)
 
 
 @app.get("/api/runs/latest")
@@ -372,6 +423,13 @@ def tool_weather():
             activity_id=sources.ACTIVITY_ID, object_type="weather",
             evidence_role="future_condition", source_type="web_api",
             source="weather_api", status="ok", value_json=value)
+    except sources.TeachingUnavailable as e:
+        # 教学注入：本次取证失败（阶段07 S5）——unknown，不是业务天气异常
+        row = insert_external_evidence(
+            activity_id=sources.ACTIVITY_ID, object_type="weather",
+            evidence_role="future_condition", source_type="web_api",
+            source="weather_api", status="unavailable", value_json=None,
+            error_message=str(e))
     except Exception as e:
         row = insert_external_evidence(
             activity_id=sources.ACTIVITY_ID, object_type="weather",
@@ -460,6 +518,104 @@ def api_explain_run(run_id: str, body: ExplainRequest | None = None):
                                {"system": explain.SYSTEM_PROMPT, "context": context})
     return {"run_id": run_id, "model": explain.LLM_MODEL,
             "explanation": text, "saved_id": saved["id"]}
+
+
+# ---------- A00 阶段07：条件推演 what-if / 父子 run / 运行对比 / S5 可信降级 ----------
+from .db import query_evidence_list, query_run_list
+from .schemas import WhatIfRequest
+
+
+@app.post("/api/runs/{parent_run_id}/what-if")
+def api_what_if(parent_run_id: str, req: WhatIfRequest):
+    """基于父 run 快照做条件推演：input_overrides 只改有限输入，其余继承父运行；
+    用同一套 约束→派生→impact→态势 链完整重跑，生成全新 what-if run_id。
+
+    绝不修改/覆盖父 run 记录；页面不得把 what-if 当最新现实状态。"""
+    parent = query_run(parent_run_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="parent run not found")
+    ps = parent["input_snapshot"]["states"]
+    ov = req.overrides
+    entrance_available = ov.entrance_available if ov.entrance_available is not None \
+        else ps["entrance"]["available"]
+    states = DerivedInput(
+        crowd=ov.crowd if ov.crowd is not None else ps["crowd"],
+        entrance={"available": entrance_available},
+        main_route=ov.main_route if ov.main_route is not None else ps["main_route"],
+        support=ov.support if ov.support is not None else ps["support"],
+    )
+    overrides = ov.model_dump(exclude_none=True)
+    assumptions = {"other_conditions_unchanged": True}
+    if req.assumptions:
+        assumptions["text"] = req.assumptions
+    refs = _normalize_refs(parent.get("evidence_refs") or {})  # 没改的条件仍来自父运行
+    return _run_pipeline(states, refs, parent.get("scenario_id"),
+                         run_type="what_if", parent_run_id=parent_run_id,
+                         overrides=overrides, assumptions=assumptions)
+
+
+def _flatten(d: dict, prefix: str = "") -> dict:
+    out = {}
+    for k, v in d.items():
+        key = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            out.update(_flatten(v, key))
+        else:
+            out[key] = v
+    return out
+
+
+@app.get("/api/runs/{run_id}/compare/{other_run_id}")
+def api_compare_runs(run_id: str, other_run_id: str):
+    """对比两次运行：输入差异 / 派生结果差异 / impact 差异 / 态势差异。"""
+    a = query_run(run_id)
+    b = query_run(other_run_id)
+    if a is None or b is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    def _meta(r):
+        return {"run_id": r["run_id"], "run_type": r["run_type"],
+                "parent_run_id": r["parent_run_id"], "created_at": r["created_at"],
+                "scenario_id": r["scenario_id"]}
+
+    sa, sb = a["input_snapshot"]["states"], b["input_snapshot"]["states"]
+    input_diff = [{"key": k, "a": sa.get(k), "b": sb.get(k), "changed": sa.get(k) != sb.get(k)}
+                  for k in sorted(set(sa) | set(sb))]
+
+    da, db = _flatten(a["derived_results"]), _flatten(b["derived_results"])
+    derived_diff = [{"key": k, "a": da.get(k), "b": db.get(k), "changed": da.get(k) != db.get(k)}
+                    for k in sorted(set(da) | set(db))]
+
+    impact_diff = []
+    for t in ("capacity", "entrance", "support", "route"):
+        ma = next((i["message"] for i in a["impacts"] if i["impact_type"] == t), None)
+        mb = next((i["message"] for i in b["impacts"] if i["impact_type"] == t), None)
+        impact_diff.append({"impact_type": t, "a": ma, "b": mb, "changed": ma != mb})
+
+    situation_diff = {
+        "summary": {"a": a["situation"]["summary"], "b": b["situation"]["summary"],
+                    "changed": a["situation"]["summary"] != b["situation"]["summary"]},
+        "completeness": {"a": a["situation_completeness"], "b": b["situation_completeness"],
+                         "changed": a["situation_completeness"] != b["situation_completeness"]},
+        "unknown_items": {"a": a["unknown_items"], "b": b["unknown_items"],
+                          "changed": a["unknown_items"] != b["unknown_items"]},
+    }
+
+    return {"run_a": _meta(a), "run_b": _meta(b),
+            "input_diff": input_diff, "derived_diff": derived_diff,
+            "impact_diff": impact_diff, "situation_diff": situation_diff}
+
+
+@app.get("/api/runs")
+def api_run_list(limit: int = Query(20, ge=1, le=200)):
+    """最近运行列表（视图四：reality/what-if、父子关系）。"""
+    return {"runs": query_run_list(limit)}
+
+
+@app.get("/api/evidence")
+def api_evidence_list(limit: int = Query(100, ge=1, le=500)):
+    """最近证据列表（视图三：按 evidence_role 分组展示）。"""
+    return {"evidence": query_evidence_list(limit)}
 
 
 @app.get("/{full_path:path}")

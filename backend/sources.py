@@ -26,12 +26,19 @@ OPEN_METEO_BASE_URL = os.getenv("OPEN_METEO_BASE_URL", "https://api.open-meteo.c
 OPEN_METEO_LATITUDE = os.getenv("OPEN_METEO_LATITUDE", "31.23")
 OPEN_METEO_LONGITUDE = os.getenv("OPEN_METEO_LONGITUDE", "121.47")
 WEATHER_FORECAST_WINDOW_MIN = int(os.getenv("WEATHER_FORECAST_WINDOW_MIN", "30"))
-# 教学覆写：非空时跳过真实请求、强制条件（保证 S3 可复现；value_json 标注 teaching_override）
+# 教学覆写：非空时跳过真实请求、强制条件（保证 S3/S5 可复现；value_json 标注 teaching_override）；
+# 取值 "unavailable" 时模拟天气 API 取证失败（阶段07 S5）
 WEATHER_TEACHING_CONDITION = os.getenv("WEATHER_TEACHING_CONDITION", "").strip()
+# 教学覆写：路线工具取证失败（阶段07 S5；1/true/yes 启用）
+ROUTE_TOOL_TEACHING_UNAVAILABLE = os.getenv("ROUTE_TOOL_TEACHING_UNAVAILABLE", "").strip().lower() in ("1", "true", "yes")
 RAG_KB_DIR = Path(os.getenv("RAG_KB_DIR", "kb"))
 TOOL_TIMEOUT_S = float(os.getenv("TOOL_TIMEOUT_S", "5"))
 
 OBJECT_TYPES = {"crowd", "entrance", "main_route", "support"}
+
+
+class TeachingUnavailable(Exception):
+    """教学注入：模拟该证据来源本次取证失败（status=unavailable，不是业务异常）。"""
 
 
 def _now_utc() -> str:
@@ -57,6 +64,8 @@ def fetch_weather() -> dict:
     WEATHER_TEACHING_CONDITION 非空 → 教学覆写（跳过网络，标注 teaching_override）；
     网络/解析失败抛异常（由调用方写 status=error 证据，未知 ≠ 异常）。
     """
+    if WEATHER_TEACHING_CONDITION == "unavailable":
+        raise TeachingUnavailable("teaching override: weather api unavailable")
     if WEATHER_TEACHING_CONDITION:
         return {
             "forecast_window_min": WEATHER_FORECAST_WINDOW_MIN,
@@ -86,6 +95,9 @@ def get_route_status(activity_id: str, state: dict | None = None) -> dict:
     store 无路线状态 → status=unavailable（工具这次没取到，不等于业务路线异常）。
     state 参数仅供测试注入。
     """
+    if ROUTE_TOOL_TEACHING_UNAVAILABLE:
+        return {"tool_call_id": None, "status": "unavailable",
+                "observed_at": None, "value_json": None}
     route = (state if state is not None else store.snapshot()).get("main_route")
     if route is None:
         return {"tool_call_id": None, "status": "unavailable",

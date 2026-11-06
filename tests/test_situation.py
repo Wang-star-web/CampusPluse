@@ -9,14 +9,15 @@ from backend.schemas import DerivedInput
 from backend.situation import build_impacts, build_situation
 
 
-def full_chain(crowd: int, available: int = 2, main_route: str = "normal",
+def full_chain(crowd: int, available: int = 2, main_route: str | None = "normal",
                support: int = 12, unknown: list[str] | None = None):
     states = DerivedInput(crowd=crowd, entrance={"available": available},
                           main_route=main_route, support=support)
     derived = compute_derived(states)
-    impacts, main = build_impacts(derived["derived"])
+    impacts, main, affected = build_impacts(derived["derived"])
     situation = build_situation(impacts, main, unknown if unknown is not None else [],
-                                derived["derived"]["capacity"]["remaining_capacity_ratio"])
+                                derived["derived"]["capacity"]["remaining_capacity_ratio"],
+                                affected)
     return derived["derived"], impacts, main, situation
 
 
@@ -94,6 +95,20 @@ def test_unknown_partial():
     assert sit["unknown_items"] == ["entrance"]
     assert sit["situation_completeness"] == "partial"
     assert sit["summary"] == "当前主要条件稳定"  # 未知不自动转异常
+
+
+def test_s5_route_unknown():
+    """S5：main_route=None（路线取证失败）→ route impact=无法确认、affected=[route_impact]、
+    summary 标注判断不完整；绝不出现"路线异常"。"""
+    derived, impacts, main, sit = full_chain(900, available=1, main_route=None, support=8)
+    assert derived["route"] == {"route_flexibility": "unknown"}
+    rt = [i for i in impacts if i["impact_type"] == "route"][0]
+    assert rt["message"] == "路线条件无法确认（本次取证失败）"
+    assert "route" not in [i["impact_type"] for i in main]
+    assert sit["affected_impacts"] == ["route_impact"]
+    assert sit["situation_completeness"] == "partial"
+    assert sit["summary"] == "容量余量明显缩小、通行灵活性下降、支持能力下降，部分影响判断不完整（证据不完整）"
+    assert "异常" not in sit["summary"] and "blocked" not in sit["summary"]
 
 
 def main():

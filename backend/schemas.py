@@ -107,12 +107,31 @@ class DerivedEntranceState(BaseModel):
 
 
 class DerivedInput(BaseModel):
-    """POST /api/compute-derived 请求体：各对象最新有效业务状态（来自 observations）。"""
+    """POST /api/compute-derived 请求体：各对象最新有效业务状态（来自 observations）。
+
+    main_route 可为 null（阶段07 S5）：本次路线事实无法确认 ≠ 业务路线异常。
+    """
 
     crowd: int = Field(ge=0)
     entrance: DerivedEntranceState
-    main_route: Literal["normal", "limited"]
+    main_route: Literal["normal", "limited"] | None = None
     support: int = Field(ge=0)
+
+
+class WhatIfOverrides(BaseModel):
+    """条件推演：只覆盖有限输入，其余继承父运行。"""
+
+    crowd: int | None = Field(default=None, ge=0)
+    entrance_available: int | None = Field(default=None, ge=0)
+    main_route: Literal["normal", "limited"] | None = None
+    support: int | None = Field(default=None, ge=0)
+
+
+class WhatIfRequest(BaseModel):
+    """POST /api/runs/{parent_run_id}/what-if 请求体。"""
+
+    overrides: WhatIfOverrides = WhatIfOverrides()
+    assumptions: str | None = None    # 可选的假设说明文字（存 assumptions_json.text）
 
 
 class RunRequest(BaseModel):

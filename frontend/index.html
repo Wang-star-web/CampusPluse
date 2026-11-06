@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CampusPulse · 校园开放日</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230f1419'/%3E%3Cpath d='M4 16h6l3-7 6 14 3-7h6' stroke='%2358a6ff' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<script src="/static/vendor/three.min.js"></script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family:"PingFang SC","Microsoft YaHei",sans-serif; background:#0f1419; color:#e6e8eb; padding:24px; }
@@ -67,6 +68,26 @@
   .b-ok { color:#3fb950; }
   .b-unavailable { color:#8b949e; }
   .b-error { color:#d29922; }
+  .b-whatif { color:#bc8cff; }
+  .b-reality { color:#58a6ff; }
+  .view3 { margin-top:24px; }
+  .view3 h2, .view4 h2, .venue-section h2 { font-size:16px; margin-bottom:12px; }
+  .ev-role { margin-bottom:14px; }
+  .ev-role h4 { font-size:13px; color:#58a6ff; margin-bottom:6px; }
+  .ev-item { font-size:12px; color:#8b949e; font-family:Consolas,monospace; padding:3px 0; border-bottom:1px dashed #21262d; }
+  .view4 { margin-top:24px; }
+  .run-row { font-size:12px; color:#8b949e; font-family:Consolas,monospace; padding:5px 0; border-bottom:1px dashed #21262d; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .run-row .btn2 { margin-right:0; }
+  .cmp-table { margin-top:8px; font-size:12px; font-family:Consolas,monospace; }
+  .cmp-table .chg { color:#d29922; }
+  .cmp-table .same { color:#8b949e; }
+  .whatif-form { margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .whatif-form input, .whatif-form select { background:#0f1419; color:#e6e8eb; border:1px solid #30363d; border-radius:8px; padding:6px 8px; font-size:12px; }
+  .venue-section { margin:24px 0; }
+  .venue-wrap { background:#0a0d11; border:1px solid #30363d; border-radius:10px; overflow:hidden; }
+  #venue-canvas { width:100%; height:340px; display:block; }
+  #venue-svg { width:100%; height:340px; display:block; }
+  .venue-note { font-size:12px; color:#6e7681; margin-top:6px; }
 </style>
 </head>
 <body>
@@ -108,6 +129,15 @@
   </div>
   <div class="hint" id="hint" hidden>暂无对象数据 —— 请确认 MQTT broker（mosquitto）与 4 个模拟器已启动</div>
 
+  <div class="venue-section">
+    <h2>场地视图（3D · 只呈现已算出的结果，不参与计算）</h2>
+    <div class="venue-wrap">
+      <canvas id="venue-canvas"></canvas>
+      <svg id="venue-svg" viewBox="0 0 1000 500" style="display:none;"></svg>
+    </div>
+    <div class="venue-note">地面色阶=最新 run 的 remaining_capacity_ratio（规则算出的结果）；入口块/路线色/支持点来自实时原始状态与派生结果 · Three.js 加载失败时自动降级 2D SVG（同一份数据）</div>
+  </div>
+
   <div class="grid">
     <div class="card" id="card-crowd"><h3>人群数量 crowd</h3><div class="value" id="v-crowd">—</div><div class="unit">人</div><div class="meta" id="m-crowd"></div></div>
     <div class="card" id="card-entrance"><h3>入口 entrance</h3><div class="value" id="v-entrance">—</div><div class="unit">开放数 / 总数</div><div class="meta" id="m-entrance"></div></div>
@@ -131,6 +161,31 @@
         <div class="ev-row" id="ev-ok-support">最后成功确认：—</div>
         <div class="ev-row" id="ev-latest-support">最新获取：—</div></div>
     </div>
+  </div>
+
+  <div class="view3">
+    <h2>视图三 · 证据与运行</h2>
+    <div><button class="btn2" id="btn-load-ev">加载最近证据</button>
+      <span id="ev3-status" style="font-size:12px;color:#8b949e;margin-left:8px;"></span></div>
+    <div id="ev3-current-unknown" class="ev-row" style="margin-top:8px;"></div>
+    <div id="ev3-roles"></div>
+  </div>
+
+  <div class="view4">
+    <h2>视图四 · 场景回放与条件推演（what-if）</h2>
+    <div><button class="btn2" id="btn-load-runs">加载运行列表</button>
+      <span id="v4-status" style="font-size:12px;color:#8b949e;margin-left:8px;"></span></div>
+    <div id="run-list"></div>
+    <div class="whatif-form">
+      <label style="font-size:12px;color:#8b949e;">覆盖（留空=继承父运行）:</label>
+      <input id="wi-crowd" type="number" placeholder="crowd" style="width:80px;">
+      <input id="wi-entrance" type="number" placeholder="入口数" style="width:80px;">
+      <select id="wi-route"><option value="">路线（继承）</option><option value="normal">normal</option><option value="limited">limited</option></select>
+      <input id="wi-support" type="number" placeholder="support" style="width:80px;">
+      <input id="wi-assumption" type="text" placeholder="假设说明（可选）" style="width:220px;">
+      <button class="btn2" id="btn-whatif">以最近一次 reality 为父生成 what-if</button>
+    </div>
+    <div id="cmp-out"></div>
   </div>
 
   <div class="footer">数据状态：持续更新 · 来源：SIMULATED（模拟数据）</div>
@@ -177,6 +232,7 @@ function renderSnapshot(payload) {
       main_route: objs.main_route.data.status,
       support: objs.support.data.count,
     };
+    venueFromLatest();
   }
   for (const [ot, env] of Object.entries(payload.objects || {})) renderObject(ot, env);
   for (const ot of OBJECTS) if (!seen.has(ot)) { // 尚未收到数据的对象保持占位
@@ -233,6 +289,9 @@ let currentRunId = null;
 function renderRun(run) {
   if (!run) return;
   currentRunId = run.run_id;
+  lastRunRatio = (run.derived_results && run.derived_results.capacity)
+    ? run.derived_results.capacity.remaining_capacity_ratio : null;
+  venueFromLatest();
   document.getElementById('sit-run-id').textContent = run.run_id;
   document.getElementById('sit-time').textContent = 'created_at ' + (run.created_at || '').slice(11, 19);
   const comp = document.getElementById('sit-completeness');
@@ -249,8 +308,9 @@ function renderRun(run) {
     const div = document.createElement('div');
     div.className = 'sit-impact';
     const ot = IMPACT_OBJ[imp.impact_type];
-    const eid = (run.evidence_refs || {})[ot] || '无引用';
-    const eidHtml = eid === '无引用' ? esc2(eid) : `<span class="evlink" data-eid="${esc2(eid)}">${esc2(eid)}</span>`;
+    const refEntry = (run.evidence_refs || {})[ot];
+    const eid = refEntry ? (typeof refEntry === 'string' ? refEntry : refEntry.evidence_id) : null;
+    const eidHtml = eid ? `<span class="evlink" data-eid="${esc2(eid)}">${esc2(eid)}</span>` : '无引用';
     div.innerHTML =
       `<div class="msg">${esc2(imp.message)}</div>` +
       `<div class="detail">约束: ${esc2(imp.source_constraint)} · 派生结果: ${esc2(imp.source_derived_result)} · 证据: ${eidHtml}</div>`;
@@ -265,10 +325,13 @@ function renderRun(run) {
   const refsBox = document.getElementById('sit-refs');
   const refEntries = Object.entries(run.evidence_refs || {});
   refsBox.innerHTML = refEntries.length
-    ? '证据引用: ' + refEntries.map(([k, id]) => {
+    ? '证据引用: ' + refEntries.map(([k, entry]) => {
+        const eid = typeof entry === 'string' ? entry : entry.evidence_id;
+        const st = typeof entry === 'string' ? 'ok' : entry.status;
         const note = (k === 'future_condition' || k === 'knowledge_basis')
           ? ` <span class="role-note">[${esc2(k)} 证据，不改变当前事实]</span>` : '';
-        return `<span class="evlink" data-eid="${esc2(id)}">${esc2(k)}:${esc2(id)}</span>${note}`;
+        const stNote = st !== 'ok' ? ` <span class="b-${esc2(st)}">(${esc2(st)}，取证失败→未知)</span>` : '';
+        return `<span class="evlink" data-eid="${esc2(eid)}">${esc2(k)}:${esc2(eid)}</span>${stNote}${note}`;
       }).join(' · ')
     : '证据引用: （无）';
   refsBox.onclick = (ev) => {
@@ -390,6 +453,272 @@ document.querySelectorAll('.preset').forEach(btn => {
       st.textContent = '下发失败（后端未连接？）';
     }
   });
+});
+
+// ---------- 场地视图：3D 只呈现已算出的结果（不参与计算）；Three.js 缺失时 SVG 降级 ----------
+let lastRunRatio = null;   // 来自最新 run 的 derived remaining_capacity_ratio（规则已算好，只呈现）
+let venueState = { crowd: 0, entrance_available: 0, route: null, support: 0 };
+let venueMode = 'none';
+let v3 = null; // three.js 场景对象集合
+
+function ratioColor(ratio) {
+  if (ratio == null) return '#2b2f36';
+  if (ratio >= 0.5) return '#1f4d2e';
+  if (ratio >= 0.2) return '#5c4a1a';
+  return '#5c1f1f';
+}
+function routeColor(route) {
+  if (route === 'limited') return '#d29922';
+  if (route === 'normal') return '#58a6ff';
+  return '#6e7681'; // unknown：取证失败，未知 ≠ 异常
+}
+
+function updateVenue(st) {
+  if (st) venueState = st;
+  if (venueMode === 'svg') renderVenueSVG();
+  else if (venueMode === '3d') renderVenue3D();
+}
+
+function renderVenueSVG() {
+  const svg = document.getElementById('venue-svg');
+  const s = venueState, ratio = lastRunRatio;
+  const g = ratioColor(ratio);
+  const routeCol = routeColor(s.route);
+  let dots = '';
+  for (let i = 0; i < Math.min(s.support || 0, 20); i++) {
+    dots += `<circle cx="${60 + i * 45}" cy="440" r="10" fill="#58a6ff"/>`;
+  }
+  svg.innerHTML = `
+    <rect x="0" y="0" width="1000" height="500" fill="#0a0d11"/>
+    <rect x="60" y="60" width="880" height="360" rx="12" fill="${g}"/>
+    <text x="70" y="55" fill="#8b949e" font-size="14">场地平面（色阶=最新 run 的 remaining_capacity_ratio: ${ratio == null ? '暂无运行' : ratio}）</text>
+    <rect x="60" y="60" width="36" height="70" fill="${s.entrance_available >= 2 ? '#58a6ff' : '#3d444d'}"/>
+    <rect x="904" y="60" width="36" height="70" fill="${s.entrance_available >= 1 ? '#58a6ff' : '#3d444d'}"/>
+    <text x="66" y="150" fill="#e6e8eb" font-size="12">E1</text><text x="910" y="150" fill="#e6e8eb" font-size="12">E2</text>
+    <rect x="60" y="225" width="880" height="14" fill="${routeCol}"/>
+    <text x="70" y="255" fill="#8b949e" font-size="12">主要路线: ${s.route == null ? 'unknown' : s.route}</text>
+    <text x="70" y="435" fill="#8b949e" font-size="12">支持人员 ${s.support || 0} 人</text>
+    ${dots}`;
+  svg.style.display = 'block';
+}
+
+function initVenue3D() {
+  venueMode = '3d';
+  const canvas = document.getElementById('venue-canvas');
+  canvas.style.display = 'block';
+  document.getElementById('venue-svg').style.display = 'none';
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(50, canvas.clientWidth / canvas.clientHeight, 0.1, 500);
+  camera.position.set(0, 60, 90);
+  camera.lookAt(0, 0, 0);
+  scene.add(new THREE.AmbientLight(0x666666));
+  const dir = new THREE.DirectionalLight(0xffffff, 1.2);
+  dir.position.set(30, 60, 30);
+  scene.add(dir);
+  // 几何对象（官方限定：场地平面 + 入口/区域立体块 + 拥堵色阶 + 简单动画，不做人物/精细建模）
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(100, 50), new THREE.MeshBasicMaterial({ color: 0x161b22 }));
+  ground.rotation.x = -Math.PI / 2;
+  scene.add(ground);
+  const heat = new THREE.Mesh(
+    new THREE.PlaneGeometry(92, 42), new THREE.MeshBasicMaterial({ color: 0x2b2f36, transparent: true, opacity: 0.85 }));
+  heat.rotation.x = -Math.PI / 2;
+  heat.position.y = 0.2;
+  scene.add(heat);
+  const ent1 = new THREE.Mesh(new THREE.BoxGeometry(6, 5, 4), new THREE.MeshBasicMaterial({ color: 0x3d444d }));
+  ent1.position.set(-42, 2.5, -16);
+  const ent2 = new THREE.Mesh(new THREE.BoxGeometry(6, 5, 4), new THREE.MeshBasicMaterial({ color: 0x3d444d }));
+  ent2.position.set(42, 2.5, -16);
+  scene.add(ent1, ent2);
+  const routeBox = new THREE.Mesh(new THREE.BoxGeometry(80, 0.6, 1.6), new THREE.MeshBasicMaterial({ color: 0x6e7681 }));
+  routeBox.position.y = 0.6;
+  scene.add(routeBox);
+  const supportGroup = new THREE.Group();
+  scene.add(supportGroup);
+  const group = { scene, camera, renderer, heat, ent1, ent2, routeBox, supportGroup };
+  v3 = group;
+  // 简单动画：缓慢自转 + 鼠标拖拽视角
+  let yaw = 0.6, pitch = 0.9, dist = 105, dragging = false, lastX = 0, lastY = 0;
+  canvas.addEventListener('pointerdown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId); });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    yaw += (e.clientX - lastX) * 0.006;
+    pitch = Math.min(1.3, Math.max(0.4, pitch + (e.clientY - lastY) * 0.004));
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  canvas.addEventListener('pointerup', () => { dragging = false; });
+  const animate = () => {
+    requestAnimationFrame(animate);
+    if (!dragging) yaw += 0.0025; // 缓慢自转（简单动画）
+    camera.position.set(dist * Math.sin(yaw) * Math.sin(pitch), dist * Math.cos(pitch), dist * Math.cos(yaw) * Math.sin(pitch));
+    camera.lookAt(0, 0, 0);
+    renderer.render(scene, camera);
+  };
+  animate();
+  renderVenue3D();
+}
+
+function renderVenue3D() {
+  if (!v3) return;
+  const s = venueState, ratio = lastRunRatio;
+  v3.heat.material.color.set(ratioColor(ratio));
+  v3.ent1.material.color.set(s.entrance_available >= 2 ? 0x58a6ff : 0x3d444d);
+  v3.ent2.material.color.set(s.entrance_available >= 1 ? 0x58a6ff : 0x3d444d);
+  // 入口受限时脉冲提醒（简单动画；只呈现状态，不做判断）
+  v3.ent2.scale.setScalar(1);
+  if (s.entrance_available < 2) v3.ent2.scale.setScalar(1 + 0.12 * Math.sin(Date.now() / 300));
+  v3.routeBox.material.color.set(routeColor(s.route));
+  while (v3.supportGroup.children.length) v3.supportGroup.remove(v3.supportGroup.children[0]);
+  const n = Math.min(s.support || 0, 20);
+  for (let i = 0; i < n; i++) {
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(0.9, 10, 10), new THREE.MeshBasicMaterial({ color: 0x58a6ff }));
+    dot.position.set(-40 + (i % 10) * 8.5, 1, 18 - Math.floor(i / 10) * 5);
+    v3.supportGroup.add(dot);
+  }
+}
+
+// 场地数据来源：WS 实时状态（原始值）+ 最新 run 的 derived（规则已算好的结果），3D 不做任何计算
+function venueFromLatest() {
+  if (!latestStates) return;
+  updateVenue({ crowd: latestStates.crowd, entrance_available: latestStates.entrance.available,
+                route: latestStates.main_route, support: latestStates.support });
+}
+if (window.THREE) { initVenue3D(); } else { venueMode = 'svg'; renderVenueSVG(); document.getElementById('venue-canvas').style.display = 'none'; }
+
+// ---------- 视图三：证据与运行（按角色分组） ----------
+const ROLE_LABELS = { current_fact: '当前事实 current_fact', future_condition: '未来条件 future_condition',
+                      knowledge_basis: '知识依据 knowledge_basis', model_output: '模型预测 model_output' };
+document.getElementById('btn-load-ev').addEventListener('click', async () => {
+  const st = document.getElementById('ev3-status');
+  st.textContent = '加载中…';
+  try {
+    const body = await (await fetch('/api/evidence?limit=200')).json();
+    const groups = { current_fact: [], future_condition: [], knowledge_basis: [], model_output: [] };
+    for (const e of body.evidence) if (groups[e.evidence_role]) groups[e.evidence_role].push(e);
+    const box = document.getElementById('ev3-roles');
+    box.innerHTML = '';
+    for (const [role, list] of Object.entries(groups)) {
+      const h = document.createElement('h4');
+      h.textContent = `${ROLE_LABELS[role]}（${list.length} 条）`;
+      const d = document.createElement('div');
+      d.className = 'ev-role';
+      d.appendChild(h);
+      for (const e of list.slice(0, 12)) {
+        const badge = BADGE[e.status] || esc(e.status);
+        const val = e.value_json
+          ? Object.entries(e.value_json).slice(0, 3).map(([k, v]) => `${esc(k)}=${esc(typeof v === 'object' ? JSON.stringify(v).slice(0, 40) : v)}`).join(' ')
+          : 'null';
+        const row = document.createElement('div');
+        row.className = 'ev-item';
+        row.innerHTML = `${esc(e.evidence_id)} · ${badge} · ${esc(e.source_type)} · ${esc(e.source)} · ${esc((e.retrieved_at || '').slice(11, 19))} · ${val}`;
+        d.appendChild(row);
+      }
+      box.appendChild(d);
+    }
+    const lat = await (await fetch('/api/runs/latest')).json().catch(() => null);
+    const unkEl = document.getElementById('ev3-current-unknown');
+    if (lat && lat.unknown_items && lat.unknown_items.length) {
+      unkEl.innerHTML = `当前运行未知项: <b>${esc(lat.unknown_items.join('、'))}</b> · 完整性: ${esc(lat.situation_completeness)}（未知 ≠ 业务异常）`;
+    } else {
+      unkEl.textContent = '';
+    }
+    st.textContent = `已加载 ${body.evidence.length} 条证据`;
+  } catch (err) { st.textContent = '加载失败（后端未连接？）'; }
+});
+
+// ---------- 视图四：场景回放与条件推演 ----------
+let runsCache = [];
+async function loadRuns() {
+  const st = document.getElementById('v4-status');
+  st.textContent = '加载中…';
+  try {
+    const body = await (await fetch('/api/runs?limit=30')).json();
+    runsCache = body.runs || [];
+    const box = document.getElementById('run-list');
+    box.innerHTML = '';
+    for (const r of runsCache) {
+      const div = document.createElement('div');
+      div.className = 'run-row';
+      const typeBadge = r.run_type === 'what_if' ? '<span class="b-whatif">what_if</span>' : '<span class="b-reality">reality</span>';
+      div.innerHTML = `${typeBadge} <span>${esc(r.run_id)}</span> <span>${esc(r.scenario_id || '-')}</span> <span>${esc((r.created_at || '').slice(11, 19))}</span> ${r.parent_run_id ? `<span>父: ${esc(r.parent_run_id)}</span>` : ''}`;
+      const bView = document.createElement('button'); bView.className = 'btn2'; bView.textContent = '查看';
+      bView.onclick = async () => { renderRun(await (await fetch('/api/runs/' + r.run_id)).json()); };
+      div.appendChild(bView);
+      if (r.parent_run_id) {
+        const bCmp = document.createElement('button'); bCmp.className = 'btn2'; bCmp.textContent = '对比父运行';
+        bCmp.onclick = () => renderCompare(r.parent_run_id, r.run_id);
+        div.appendChild(bCmp);
+      }
+      box.appendChild(div);
+    }
+    st.textContent = `共 ${runsCache.length} 条运行`;
+  } catch (err) { st.textContent = '加载失败（后端未连接？）'; }
+}
+document.getElementById('btn-load-runs').addEventListener('click', loadRuns);
+
+function renderCompare(aId, bId) {
+  const out = document.getElementById('cmp-out');
+  out.textContent = '对比中…';
+  fetch(`/api/runs/${aId}/compare/${bId}`).then(r => r.json()).then(cmp => {
+    const line = (label, item, fmt) => {
+      const cls = item.changed ? 'chg' : 'same';
+      return `<div class="${cls}">${label}: ${fmt(item.a)} → ${fmt(item.b)}${item.changed ? '' : '（无变化）'}</div>`;
+    };
+    const fmtState = v => v == null ? 'null' : (typeof v === 'object' ? JSON.stringify(v) : v);
+    const chgInput = cmp.input_diff.filter(d => d.changed);
+    const chgDerived = cmp.derived_diff.filter(d => d.changed);
+    const chgImpact = cmp.impact_diff.filter(d => d.changed);
+    out.innerHTML = `<div class="cmp-table">
+      <div>对比 ${esc(cmp.run_a.run_id)} (${esc(cmp.run_a.run_type)}) ← ${esc(cmp.run_b.run_id)} (${esc(cmp.run_b.run_type)})</div>
+      <div style="margin-top:6px;"><b>输入差异</b>${chgInput.length ? '' : '（无）'}</div>
+      ${chgInput.map(d => `<div class="chg">${esc(d.key)}: ${fmtState(d.a)} → ${fmtState(d.b)}</div>`).join('')}
+      <div style="margin-top:6px;"><b>派生结果差异</b>${chgDerived.length ? '' : '（无）'}</div>
+      ${chgDerived.map(d => `<div class="chg">${esc(d.key)}: ${fmtState(d.a)} → ${fmtState(d.b)}</div>`).join('')}
+      <div style="margin-top:6px;"><b>局部影响差异</b>${chgImpact.length ? '' : '（无）'}</div>
+      ${chgImpact.map(d => `<div class="chg">${esc(d.impact_type)}: ${esc(d.a)} → ${esc(d.b)}</div>`).join('')}
+      <div style="margin-top:6px;"><b>整体态势差异</b></div>
+      <div class="${cmp.situation_diff.summary.changed ? 'chg' : 'same'}">summary: ${esc(cmp.situation_diff.summary.a)} → ${esc(cmp.situation_diff.summary.b)}</div>
+      <div class="${cmp.situation_diff.completeness.changed ? 'chg' : 'same'}">completeness: ${esc(cmp.situation_diff.completeness.a)} → ${esc(cmp.situation_diff.completeness.b)}</div>
+      <div class="${cmp.situation_diff.unknown_items.changed ? 'chg' : 'same'}">unknown: ${esc(JSON.stringify(cmp.situation_diff.unknown_items.a))} → ${esc(JSON.stringify(cmp.situation_diff.unknown_items.b))}</div>
+    </div>`;
+  }).catch(() => { out.textContent = '对比失败'; });
+}
+
+document.getElementById('btn-whatif').addEventListener('click', async () => {
+  const st = document.getElementById('v4-status');
+  const parent = runsCache.find(r => r.run_type === 'reality');
+  if (!parent) { st.textContent = '没有 reality 运行可作父运行（先执行现实运行）'; return; }
+  const overrides = {};
+  const crowd = document.getElementById('wi-crowd').value;
+  const ent = document.getElementById('wi-entrance').value;
+  const route = document.getElementById('wi-route').value;
+  const sup = document.getElementById('wi-support').value;
+  const assumption = document.getElementById('wi-assumption').value.trim();
+  if (crowd !== '') overrides.crowd = Number(crowd);
+  if (ent !== '') overrides.entrance_available = Number(ent);
+  if (route !== '') overrides.main_route = route;
+  if (sup !== '') overrides.support = Number(sup);
+  st.textContent = '推演中…';
+  try {
+    const res = await fetch(`/api/runs/${parent.run_id}/what-if`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ overrides, assumptions: assumption || null }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      st.textContent = '推演失败: ' + (err.detail || ('HTTP ' + res.status));
+      return;
+    }
+    const created = await res.json();
+    const snap = await (await fetch('/api/runs/' + created.run_id)).json();
+    renderRun(snap);
+    renderCompare(parent.run_id, created.run_id);
+    loadRuns();
+    st.textContent = 'what-if 已生成: ' + created.run_id + '（父运行未被修改）';
+  } catch (err) { st.textContent = '推演失败（后端未连接？）'; }
 });
 
 let retryDelay = 1;

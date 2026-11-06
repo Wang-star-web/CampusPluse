@@ -54,7 +54,8 @@ def compute_derived(states: DerivedInput) -> dict:
     support_gap = cfg.support_reference - states.support
     support_ratio = states.support / cfg.support_reference
 
-    route_flexibility = ROUTE_FLEXIBILITY[states.main_route]
+    # 阶段07：main_route 为 null 表示本次路线事实无法确认（取证失败 ≠ 业务异常）
+    route_flexibility = ROUTE_FLEXIBILITY[states.main_route] if states.main_route else "unknown"
 
     return {
         "activity_id": "campus_open_day_01",

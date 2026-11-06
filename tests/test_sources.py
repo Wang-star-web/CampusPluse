@@ -79,9 +79,9 @@ def test_s3_future_condition_boundary():
     states = DerivedInput(crowd=750, entrance={"available": 2},
                           main_route="normal", support=12)
     derived = compute_derived(states)
-    impacts, main = build_impacts(derived["derived"])
+    impacts, main, affected = build_impacts(derived["derived"])
     situation = build_situation(impacts, main, [],
-                                derived["derived"]["capacity"]["remaining_capacity_ratio"])
+                                derived["derived"]["capacity"]["remaining_capacity_ratio"], affected)
 
     # 当前路线事实未被未来天气覆盖
     assert derived["states"]["main_route"] == "normal"
