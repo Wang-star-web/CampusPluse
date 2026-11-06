@@ -609,9 +609,13 @@ document.getElementById('btn-load-ev').addEventListener('click', async () => {
   const st = document.getElementById('ev3-status');
   st.textContent = '加载中…';
   try {
-    const body = await (await fetch('/api/evidence?limit=200')).json();
+    // 按角色分别取各自最近窗口：避免 MQTT 高频 current_fact 挤掉天气/知识/预测等低频证据
+    const roles = ['current_fact', 'future_condition', 'knowledge_basis', 'model_output'];
     const groups = { current_fact: [], future_condition: [], knowledge_basis: [], model_output: [] };
-    for (const e of body.evidence) if (groups[e.evidence_role]) groups[e.evidence_role].push(e);
+    for (const role of roles) {
+      const body = await (await fetch(`/api/evidence?role=${role}&limit=20`)).json();
+      groups[role] = body.evidence || [];
+    }
     const box = document.getElementById('ev3-roles');
     box.className = 'role-grid';
     box.innerHTML = '';

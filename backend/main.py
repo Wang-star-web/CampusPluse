@@ -613,9 +613,10 @@ def api_run_list(limit: int = Query(20, ge=1, le=200)):
 
 
 @app.get("/api/evidence")
-def api_evidence_list(limit: int = Query(100, ge=1, le=500)):
-    """最近证据列表（视图三：按 evidence_role 分组展示）。"""
-    return {"evidence": query_evidence_list(limit)}
+def api_evidence_list(limit: int = Query(100, ge=1, le=500),
+                      role: str | None = Query(None, pattern="^(current_fact|future_condition|knowledge_basis|model_output)$")):
+    """最近证据列表（视图三：按 evidence_role 分组展示；role 参数按角色取各自窗口）。"""
+    return {"evidence": query_evidence_list(limit, role)}
 
 
 @app.get("/{full_path:path}")

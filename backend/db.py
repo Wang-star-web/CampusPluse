@@ -367,13 +367,23 @@ def query_run_list(limit: int = 20) -> list[dict]:
         conn.close()
 
 
-def query_evidence_list(limit: int = 100) -> list[dict]:
-    """最近证据列表（视图三：按角色分组展示）。"""
+def query_evidence_list(limit: int = 100, role: str | None = None) -> list[dict]:
+    """最近证据列表（视图三：按角色分组展示）。
+
+    role 给定则只取该角色的最近行——避免 MQTT 高频 current_fact 挤占全局窗口，
+    使天气/知识/预测等低频证据也能看到各自的历史。
+    """
     conn = connect()
     try:
-        rows = conn.execute(
-            "SELECT * FROM evidence ORDER BY retrieved_at DESC, evidence_id DESC LIMIT ?",
-            (limit,)).fetchall()
+        if role:
+            rows = conn.execute(
+                "SELECT * FROM evidence WHERE evidence_role=?"
+                " ORDER BY retrieved_at DESC, evidence_id DESC LIMIT ?",
+                (role, limit)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM evidence ORDER BY retrieved_at DESC, evidence_id DESC LIMIT ?",
+                (limit,)).fetchall()
         return [_parse_row(r) for r in rows]
     finally:
         conn.close()
