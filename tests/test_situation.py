@@ -81,10 +81,10 @@ def test_route_limited():
 
 
 def test_all_attention():
-    """全部命中关注档（crowd=900 低档+1/2+limited+8）→ summary 四项标签、无"其他保持稳定"尾缀。"""
+    """全部命中关注档（S4：crowd=900 低档+1/2+limited+8）→ 案例书冻结 summary"组织压力上升"。"""
     _, _, main, sit = full_chain(900, available=1, main_route="limited", support=8)
     assert len(main) == 4
-    assert sit["summary"] == "容量余量明显缩小、通行灵活性下降、支持能力下降、路线灵活性下降"
+    assert sit["summary"] == "组织压力上升"
     assert not sit["summary"].endswith("其他主要条件保持稳定")
 
 

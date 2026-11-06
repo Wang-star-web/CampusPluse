@@ -43,6 +43,13 @@
   .role-note { color:#6e7681; }
   #btn-run { background:#1f6feb; color:#fff; border:0; border-radius:8px; padding:8px 16px; cursor:pointer; font-size:13px; margin-top:12px; }
   #run-status { margin-left:10px; font-size:12px; color:#8b949e; }
+  .sit-explain { margin-top:16px; border-top:1px dashed #30363d; padding-top:12px; }
+  .sit-explain h3 { font-size:13px; color:#8b949e; margin-bottom:8px; }
+  .btn2 { background:#21262d; color:#e6e8eb; border:1px solid #30363d; border-radius:8px; padding:6px 12px; cursor:pointer; font-size:12px; margin-right:8px; }
+  .btn2:hover { border-color:#58a6ff; }
+  #explain-q { background:#0f1419; color:#e6e8eb; border:1px solid #30363d; border-radius:8px; padding:6px 10px; font-size:12px; width:340px; max-width:70vw; margin-right:8px; }
+  #explain-out { margin-top:10px; font-size:13px; color:#c9d1d9; line-height:1.8; white-space:pre-wrap; }
+  #predict-status { font-size:12px; color:#8b949e; }
   .toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
   .toolbar label { font-size:13px; color:#8b949e; margin-right:4px; }
   .preset { background:#161b22; color:#e6e8eb; border:1px solid #30363d; border-radius:8px; padding:6px 14px; cursor:pointer; font-size:13px; }
@@ -79,6 +86,16 @@
     <div id="trace-panel"></div>
     <button id="btn-run">执行现实运行（生成新 run_id）</button>
     <span id="run-status"></span>
+    <div class="sit-explain">
+      <h3>阶段06 · 模型预测证据 + LLM 解释（解释是附加功能：LLM 关闭时核心态势不受影响）</h3>
+      <button class="btn2" id="btn-predict">生成人数预测证据（ML）</button>
+      <span id="predict-status"></span>
+      <div style="margin-top:8px;">
+        <input type="text" id="explain-q" placeholder="就当前运行提问（可留空）">
+        <button class="btn2" id="btn-explain">LLM 解释当前运行</button>
+      </div>
+      <div id="explain-out"></div>
+    </div>
   </div>
   <div class="toolbar">
     <label>场景预设（改数据源配置）</label>
@@ -212,8 +229,10 @@ async function showEvidenceDetail(eid) {
     document.getElementById('trace-panel').textContent = '证据详情获取失败';
   }
 }
+let currentRunId = null;
 function renderRun(run) {
   if (!run) return;
+  currentRunId = run.run_id;
   document.getElementById('sit-run-id').textContent = run.run_id;
   document.getElementById('sit-time').textContent = 'created_at ' + (run.created_at || '').slice(11, 19);
   const comp = document.getElementById('sit-completeness');
@@ -294,6 +313,45 @@ async function executeRun() {
   }
 }
 document.getElementById('btn-run').addEventListener('click', executeRun);
+
+// 阶段06：ML 预测证据 + LLM 解释（都是附加功能，不影响核心链路）
+document.getElementById('btn-predict').addEventListener('click', async () => {
+  const st = document.getElementById('predict-status');
+  st.textContent = '训练中…';
+  try {
+    const res = await fetch('/api/tools/predict-crowd', {method: 'POST'});
+    const body = await res.json();
+    const e = body.evidence;
+    if (e.status === 'ok') {
+      st.textContent = `${e.evidence_id} · 预测未来${e.value_json.prediction_window_min}分钟人数=${e.value_json.predicted_crowd} · MAE=${e.value_json.metric_summary.mae}（baseline ${e.value_json.metric_summary.baseline_mae}）`;
+    } else {
+      st.textContent = `${e.evidence_id} · status=${e.status} · ${e.error_message || ''}（不伪造预测值）`;
+    }
+  } catch (err) {
+    st.textContent = '预测失败（后端未连接？）';
+  }
+});
+document.getElementById('btn-explain').addEventListener('click', async () => {
+  const out = document.getElementById('explain-out');
+  if (!currentRunId) { out.textContent = '尚无运行记录，请先"执行现实运行"。'; return; }
+  const q = document.getElementById('explain-q').value.trim();
+  out.textContent = '解释生成中…';
+  try {
+    const res = await fetch(`/api/runs/${currentRunId}/explain`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(q ? {question: q} : {}),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) {
+      out.textContent = `【LLM 解释（${body.model}，只解释已有计算结果）】\n${body.explanation}`;
+    } else {
+      out.textContent = `解释不可用：${body.detail || ('HTTP ' + res.status)}`;
+    }
+  } catch (err) {
+    out.textContent = '解释请求失败（后端未连接？）';
+  }
+});
 loadLatestRun();
 
 function setConn(state, text) {

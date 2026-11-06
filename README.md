@@ -447,6 +447,75 @@ evidence_id 沿用 `ev_{object_type}_{seq:03d}`（weather/knowledge/main_route �
 **自动化测试**：`py -m tests.test_sources`（8 条：天气映射、路线工具 ok/unavailable、
 RAG matched/no_match/unavailable、引用解析、S3 边界链）。
 
+## A00 阶段06：模型预测证据 + LLM 解释层
+
+### 硬边界
+
+- **模型预测不是当前事实**：`evidence_role=model_output` 是独立预测证据，绝不覆盖当前 crowd 真实值
+- **LLM 只解释、不判定**：只读取 run 已算好的结构化结果，输出解释文本；不返回/不修改
+  impact、situation、summary；**禁止写回 runs 表任何字段**（解释单独存 explanations 表）
+- **先计算，再解释**：关闭 LLM 服务时，态势/影响/run_id/证据全部功能照常可用，解释只是附加功能
+
+### ML 人数预测（POST /api/tools/predict-crowd）
+
+- 模型 `crowd_forecast_v1`：一元线性回归（时间序号→crowd），Baseline=上一窗口值；
+  时间序前 80% 训练 / 后 20% 测试，MAE 评估并与 Baseline 对比（诚实保留结果）
+- 训练数据 = observations 里的历史 crowd 成功事实；无未来信息泄漏
+- 证据 value_json（官方字段）：`model_version / prediction_for / prediction_window_min(30) /
+  predicted_crowd / metric_summary{mae, baseline_mae, train_points, test_points} / trained_at`
+- 数据不足（<5 点）→ `status=unavailable`，**绝不伪造预测值**
+
+### LLM 解释（POST /api/runs/{run_id}/explain）
+
+请求体 `{"question": "..."}`（可选）。后端组装该 run 的结构化上下文（当前状态/证据引用/
+约束/派生/影响/态势/未知项/预测证据），交给 LLM；解释存 `explanations` 表
+（id/run_id/question/explanation/model/prompt_json/created_at）。LLM 未配置或不可用 → 503 并说明，
+核心功能不受影响。
+
+**prompt 样例**（系统提示，五条硬边界）：
+```
+你是 CampusPulse 校园活动脉搏系统的态势解释助手。
+你只解释下面已经计算好的结构化运行结果，严格遵守：
+1. 只解释已有计算结果，不发明任何新事实、不补充缺失数据；
+2. 不新增、不修改任何业务约束或规则；
+3. 不修改整体态势标签（summary）、不修改任何 impact 文案；
+4. 缺证据时明确说明"当前缺少相关证据"，不得编造；
+5. 不出现系统没有定义的专业安全等级（如"高风险""必须疏散"等）。
+你的输出只用于帮助人理解系统已经算出的结论，不是新的裁决。
+```
+
+### LLM 配置（.env；DeepSeek 或任何 OpenAI 兼容 chat/completions）
+
+```
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=          ← 填真实 key（.env 已被 git 忽略；不填则解释接口 503，核心不受影响）
+LLM_MODEL=deepseek-chat
+```
+
+### 前端
+
+视图一新增：`生成人数预测证据（ML）` 按钮（显示证据 id/预测值/MAE）；`LLM 解释当前运行`
+输入框+按钮（显示解释文本；不可用时明确提示"解释不可用，核心态势不受影响"）。
+首页保持"整体结论+影响链"结构，不是聊天框。
+
+### S4 golden 复现（900 人全链路：多源证据→约束→派生→impact→态势→ML预测→LLM解释）
+
+1. 后端带天气教学覆写启动：PowerShell `$env:WEATHER_TEACHING_CONDITION='heavy_rain_expected'` 后
+   `py -m uvicorn backend.main:app --port 8000`（.env 里配好 LLM_API_KEY 才有解释）
+2. 取证据：四对象最新 ok 证据 id + `POST /api/tools/weather`（future_condition）+
+   `POST /api/tools/rag` `{"query":"强降雨 注意事项"}`（knowledge_basis）+
+   `POST /api/tools/predict-crowd`（model_output）
+3. 提交 S4 运行：states = {crowd:900, entrance:{available:1}, main_route:"limited", support:8}，
+   evidence_refs 含上面全部 id → `POST /api/runs` → run_id
+4. 验证：`GET /api/runs/{run_id}` → `summary = 组织压力上升`（教学态势标签，非专业安全评估）、
+   main_impacts = 4 项（capacity/entrance/support/route）、evidence_refs 分层含
+   model_output/future_condition/knowledge_basis；`/api/current` 的 crowd 仍是 900（预测没篡改现实）
+5. `POST /api/runs/{run_id}/explain` `{"question":"为什么组织压力上升"}` → 自然语言解释
+   （只解释已有结果）；停掉 LLM（不配 key）再调 → 503，第 4 步全部功能依旧可用
+
+**自动化测试**：`py -m tests.test_predict`（6 条：趋势外推、数据不足、无泄漏、prompt 五条硬边界、
+上下文只含结构化结果、S4 model_output 引用分层）；全量回归 30/30。
+
 ## 开发约定
 
 - 代码为本项目新写，基于已学能力迁移式实现（多站点并列判定思路 → 多对象状态并行采集）。

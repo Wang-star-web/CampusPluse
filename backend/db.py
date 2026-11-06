@@ -67,6 +67,19 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 """
 
+# 阶段06 LLM 解释单独存表（禁止写回 runs 的 situation/impacts 等任何字段）
+EXPLANATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS explanations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    question TEXT NULL,
+    explanation TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+"""
+
 # Day1 旧结构识别列：旧表含 scene_json（NOT NULL）且与新结构不兼容
 
 EVIDENCE_ROLE = "current_fact"  # 阶段02 统一角色；阶段05 起扩展 current_fact/future_condition/...
@@ -101,6 +114,7 @@ def connect() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(SCHEMA_SQL)
+    conn.executescript(EXPLANATIONS_TABLE_SQL)
     _ensure_runs_schema(conn)
     return conn
 
@@ -314,5 +328,24 @@ def query_latest_run() -> dict | None:
             f"SELECT {', '.join(_RUN_COLS)} FROM runs"
             " WHERE run_type IS NOT NULL ORDER BY created_at DESC, run_id DESC LIMIT 1").fetchone()
         return _parse_run_row(row)
+    finally:
+        conn.close()
+
+
+# ---------- 阶段06：LLM 解释记录（独立表，绝不写回 runs） ----------
+
+def insert_explanation(run_id: str, question: str | None, explanation: str,
+                       model: str, prompt_json: dict) -> dict:
+    conn = connect()
+    try:
+        created_at = _now_utc()
+        cur = conn.execute(
+            "INSERT INTO explanations (run_id, question, explanation, model, prompt_json, created_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (run_id, question, explanation, model,
+             json.dumps(prompt_json, ensure_ascii=False), created_at))
+        conn.commit()
+        return {"id": cur.lastrowid, "run_id": run_id, "question": question,
+                "explanation": explanation, "model": model, "created_at": created_at}
     finally:
         conn.close()

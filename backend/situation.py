@@ -92,9 +92,13 @@ def build_situation(impacts: list[dict], main_impacts: list[dict],
     summary 规则（可解释归纳）：
     - 无需要关注的影响 → "当前主要条件稳定"
     - 有 → 各影响简短标签以"、"连接；若未全部命中，追加"，其他主要条件保持稳定"
+    - 四类影响全部命中（S4 多因素场景）→ 案例书冻结文案"组织压力上升"
+      （教学用态势标签，不等同于专业安全评估结论）
     """
     if not main_impacts:
         summary = "当前主要条件稳定"
+    elif len(main_impacts) == len(impacts):
+        summary = "组织压力上升"  # S4 golden 冻结文案
     else:
         labels = []
         for i in main_impacts:

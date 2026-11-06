@@ -131,3 +131,9 @@ class RagQuery(BaseModel):
     """POST /api/tools/rag 请求体。"""
 
     query: str = Field(min_length=1)
+
+
+class ExplainRequest(BaseModel):
+    """POST /api/runs/{run_id}/explain 请求体（question 可选，缺省解释完整态势）。"""
+
+    question: str | None = None

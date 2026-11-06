@@ -142,15 +142,16 @@ def rag_retrieve(query: str, top_k: int = 3, kb_dir: Path | None = None) -> dict
 def resolve_evidence_refs(rows: dict[str, dict], ref_ids: list[str]) -> tuple[dict, list[str]]:
     """证据 id 列表 → 引用映射。
 
-    键 = object_type（四个业务对象，current_fact）或 evidence_role（future_condition/
-    knowledge_basis 等外部证据）；返回 (refs_map, errors)，errors 为未通过校验的说明。
-    校验由调用方结合证据行完成，本函数只做键选择。
+    键选择规则（阶段06 扩展）：
+    - evidence_role != current_fact → 键 = evidence_role（future_condition/knowledge_basis/
+      model_output 等；即使 object_type 是业务对象也不抢占 current_fact 键）；
+    - current_fact → 键 = object_type。
     """
     refs: dict[str, str] = {}
     for eid in ref_ids:
         ev = rows.get(eid)
         if ev is None:
             continue  # 存在性由调用方校验（422）
-        key = ev["object_type"] if ev["object_type"] in OBJECT_TYPES else ev["evidence_role"]
+        key = ev["object_type"] if ev["evidence_role"] == "current_fact" else ev["evidence_role"]
         refs[key] = eid
     return refs, []

@@ -298,14 +298,14 @@ def api_create_run(req: RunRequest):
     situation/summary 全部由 Python 教学规则生成，LLM 不参与判定。
     完成后的 run 永不 UPDATE——新输入必然生成全新 run_id。
     """
-    refs = {}  # 键 = 业务对象 object_type（current_fact）或 evidence_role（future_condition/knowledge_basis 等外部证据）
+    refs = {}  # 键 = evidence_role（非 current_fact 外部证据）或 object_type（current_fact）
     for eid in req.evidence_refs:
         ev = query_evidence(eid)
         if ev is None:
             raise HTTPException(status_code=422, detail=f"evidence not found: {eid}")
         if ev["status"] != "ok":
             raise HTTPException(status_code=422, detail=f"evidence not ok: {eid} (status={ev['status']})")
-        key = ev["object_type"] if ev["object_type"] in _sources.OBJECT_TYPES else ev["evidence_role"]
+        key = ev["object_type"] if ev["evidence_role"] == "current_fact" else ev["evidence_role"]
         refs[key] = eid
 
     derived = compute_derived(req.states)
@@ -422,6 +422,44 @@ def tool_rag(body: RagQuery):
             evidence_role="knowledge_basis", source_type="rag", source="rag_local_kb",
             status="unavailable", value_json=None, error_message=f"rag unavailable: {e}")
     return {"evidence": row}
+
+
+# ---------- A00 阶段06：模型预测证据 + LLM 解释层（LLM 只解释，不判定；解释是附加功能） ----------
+from . import explain, predict
+from .db import insert_explanation
+from .schemas import ExplainRequest
+
+
+@app.post("/api/tools/predict-crowd")
+def tool_predict_crowd():
+    """传统 ML 模型预测未来 30 分钟人数 → model_output 证据（独立证据，不覆盖当前 crowd 真实值）。
+
+    数据不足/模型不可用 → status=unavailable，绝不伪造预测值。"""
+    row = predict.run_prediction()
+    return {"evidence": row}
+
+
+@app.post("/api/runs/{run_id}/explain")
+def api_explain_run(run_id: str, body: ExplainRequest | None = None):
+    """LLM 只解释该 run 已算好的结构化结果（不发明事实/不改态势/不发明约束）。
+
+    解释存 explanations 表，禁止写回 runs 任何字段；LLM 未配置或不可用 → 503，
+    核心态势/影响/run_id 功能完全不受影响。"""
+    snap = query_run(run_id)
+    if snap is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    question = body.question if body else None
+    context = explain.build_context(snap, question)
+    user_prompt = explain.build_user_prompt(context)
+    try:
+        text = explain.call_llm(explain.SYSTEM_PROMPT, user_prompt)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                            detail=f"LLM explanation unavailable: {e}（核心态势/影响/run_id 不受影响）")
+    saved = insert_explanation(run_id, question, text, explain.LLM_MODEL,
+                               {"system": explain.SYSTEM_PROMPT, "context": context})
+    return {"run_id": run_id, "model": explain.LLM_MODEL,
+            "explanation": text, "saved_id": saved["id"]}
 
 
 @app.get("/{full_path:path}")
