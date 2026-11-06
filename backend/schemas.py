@@ -116,11 +116,18 @@ class DerivedInput(BaseModel):
 
 
 class RunRequest(BaseModel):
-    """POST /api/runs 请求体：一组业务状态 + 关联证据 id 列表（阶段04 reality 运行）。
+    """POST /api/runs 请求体：一组业务状态 + 关联证据 id 列表（阶段04/05 reality 运行）。
 
-    evidence_refs 中的每个 id 必须存在于 evidence 表且 status=ok（引用必须指向真实成功证据）。
+    evidence_refs 中的每个 id 必须存在于 evidence 表且 status=ok（引用必须指向真实成功证据）；
+    阶段05 起可混入 current_fact / future_condition / knowledge_basis 各类证据引用。
     """
 
-    scenario_id: str | None = None      # 教学场景标识（如 S1/S2）；reality 运行可空
+    scenario_id: str | None = None      # 教学场景标识（如 S1/S2/S3）；reality 运行可空
     states: DerivedInput
     evidence_refs: list[str] = []
+
+
+class RagQuery(BaseModel):
+    """POST /api/tools/rag 请求体。"""
+
+    query: str = Field(min_length=1)

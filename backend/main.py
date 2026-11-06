@@ -284,6 +284,7 @@ def api_compute_derived(states: DerivedInput):
 import uuid as _uuid
 from datetime import datetime as _dt, timezone as _tz
 
+from . import sources as _sources
 from .db import insert_run, query_evidence, query_latest_run, query_run
 from .schemas import RunRequest
 from .situation import IMPACT_TO_OBJECT, build_impacts, build_situation
@@ -297,14 +298,15 @@ def api_create_run(req: RunRequest):
     situation/summary 全部由 Python 教学规则生成，LLM 不参与判定。
     完成后的 run 永不 UPDATE——新输入必然生成全新 run_id。
     """
-    refs = {}  # object_type -> evidence_id；每个引用必须指向真实成功证据
+    refs = {}  # 键 = 业务对象 object_type（current_fact）或 evidence_role（future_condition/knowledge_basis 等外部证据）
     for eid in req.evidence_refs:
         ev = query_evidence(eid)
         if ev is None:
             raise HTTPException(status_code=422, detail=f"evidence not found: {eid}")
         if ev["status"] != "ok":
             raise HTTPException(status_code=422, detail=f"evidence not ok: {eid} (status={ev['status']})")
-        refs[ev["object_type"]] = eid
+        key = ev["object_type"] if ev["object_type"] in _sources.OBJECT_TYPES else ev["evidence_role"]
+        refs[key] = eid
 
     derived = compute_derived(req.states)
     impacts, main_impacts = build_impacts(derived["derived"])
@@ -349,6 +351,77 @@ def api_get_run(run_id: str):
     if snap is None:
         raise HTTPException(status_code=404, detail="run not found")
     return snap
+
+
+# ---------- A00 阶段05：多源证据（天气 web_api / 路线工具 / RAG 知识库） ----------
+from . import sources
+from .db import insert_external_evidence
+from .schemas import RagQuery
+
+
+@app.post("/api/tools/weather")
+def tool_weather():
+    """真实调用 Open-Meteo 天气 Web API → future_condition 证据。
+
+    只存证据，绝不篡改当前 crowd/route 等 current_fact 业务状态；
+    请求失败 → status=error、value_json=null（未知 ≠ 异常）。
+    """
+    try:
+        value = sources.fetch_weather()
+        row = insert_external_evidence(
+            activity_id=sources.ACTIVITY_ID, object_type="weather",
+            evidence_role="future_condition", source_type="web_api",
+            source="weather_api", status="ok", value_json=value)
+    except Exception as e:
+        row = insert_external_evidence(
+            activity_id=sources.ACTIVITY_ID, object_type="weather",
+            evidence_role="future_condition", source_type="web_api",
+            source="weather_api", status="error", value_json=None,
+            error_message=f"weather fetch failed: {e}")
+    return {"evidence": row}
+
+
+@app.post("/api/tools/route")
+def tool_route():
+    """路线查询工具真实执行（读取路线状态服务=后端内存 store）→ current_fact 证据（source_type=tool）。
+
+    工具这次没取到（store 无路线状态）→ status=unavailable——是取证失败，
+    绝不写成业务路线异常（route=blocked 之类）。"""
+    result = sources.get_route_status(sources.ACTIVITY_ID)
+    if result["status"] == "ok":
+        row = insert_external_evidence(
+            activity_id=sources.ACTIVITY_ID, object_type="main_route",
+            evidence_role="current_fact", source_type="tool", source="route_tool",
+            status="ok", value_json=result["value_json"], observed_at=result["observed_at"])
+    else:
+        row = insert_external_evidence(
+            activity_id=sources.ACTIVITY_ID, object_type="main_route",
+            evidence_role="current_fact", source_type="tool", source="route_tool",
+            status="unavailable", value_json=None,
+            error_message="route state service has no main_route state")
+    return {"evidence": row}
+
+
+@app.post("/api/tools/rag")
+def tool_rag(body: RagQuery):
+    """本地知识库检索 → knowledge_basis 证据。
+
+    no_match = 检索成功执行但无足够匹配（status=ok，retrieval_status=no_match，
+    不代表"规则不存在/相反"）；知识库目录不可读 → status=unavailable、value_json=null。"""
+    try:
+        result = sources.rag_retrieve(body.query)
+        value = {"query": body.query, "top_k": 3, "retrieval_status": result["retrieval_status"],
+                 "retrieved_chunks": result["retrieved_chunks"], "citation": result["citation"]}
+        row = insert_external_evidence(
+            activity_id=sources.ACTIVITY_ID, object_type="knowledge",
+            evidence_role="knowledge_basis", source_type="rag", source="rag_local_kb",
+            status="ok", value_json=value)
+    except Exception as e:
+        row = insert_external_evidence(
+            activity_id=sources.ACTIVITY_ID, object_type="knowledge",
+            evidence_role="knowledge_basis", source_type="rag", source="rag_local_kb",
+            status="unavailable", value_json=None, error_message=f"rag unavailable: {e}")
+    return {"evidence": row}
 
 
 @app.get("/{full_path:path}")

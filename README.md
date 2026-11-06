@@ -378,6 +378,75 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/api/runs -Method Post -ContentType 
 **自动化测试**：`py -m tests.test_situation`（9 条：S1、S2-750、S2 全序列、620 现场值、入口 1/2、
 支持 8、路线 limited、全命中档、unknown/partial）。
 
+## A00 阶段05：接入多源证据（天气 / 路线工具 / 本地知识库 RAG）
+
+### 证据角色分层（固定原则）
+
+| 信息 | evidence_role | source_type | 时间属性 |
+|---|---|---|---|
+| 当前人数/入口 | current_fact | simulated | 当前 / 已发生 |
+| 当前路线（工具查询） | current_fact | tool | 当前 / 已发生 |
+| 天气预报（Open-Meteo） | future_condition | web_api | **未来** |
+| 场馆/活动规则（本地 RAG） | knowledge_basis | rag | 规则有效期 |
+
+`evidence_role` 回答"扮演什么角色"；`source_type` 回答"通过什么通道取得"；`status` 回答"这一次取得是否成功"。
+**未来条件不篡改当前事实**：未来强降雨 ≠ 当前路线异常；**no_match ≠ 取证失败**（status=ok）；
+**工具 unavailable ≠ 业务对象失败**（不是 route=blocked）。
+
+### 三个工具接口
+
+- `POST /api/tools/weather` — 真实 HTTP 请求 Open-Meteo，返回 future_condition 证据：
+  `value_json = {forecast_window_min, condition(normal|heavy_rain_expected), raw_time}`；
+  请求失败 → status=error、value_json=null（未知 ≠ 异常）
+- `POST /api/tools/route` — 路线查询工具真实执行（读取路线状态服务=后端内存 store），
+  返回 current_fact 证据（source_type=tool）；store 无路线状态 → status=unavailable
+- `POST /api/tools/rag` — 请求体 `{"query": "..."}`；本地知识库（kb/*.txt，含标题/来源/获取时间）关键词检索：
+  matched → status=ok + `retrieval_status=matched` + retrieved_chunks + citation；
+  no_match → status=ok + `retrieval_status=no_match`（检索成功但无匹配，不编造引用）；
+  知识库目录不可读 → status=unavailable、value_json=null
+
+三类证据统一写入 evidence 表（带各自 evidence_role/source_type），
+evidence_id 沿用 `ev_{object_type}_{seq:03d}`（weather/knowledge/main_route 各自序列）。
+
+### POST /api/runs 外部证据引用（阶段05 扩展）
+
+`evidence_refs` 可混入各角色证据 id；写入 `evidence_refs_json` 的映射键 =
+业务对象 object_type（crowd/entrance/main_route/support，即 current_fact）
+或 evidence_role（future_condition / knowledge_basis 等外部证据）。
+查询 run_id 即可看出本次分析使用了哪些角色的证据。
+
+### .env.example（只放变量名，不要密钥；复制为 .env 后填写，.env 已被 git 忽略）
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| OPEN_METEO_BASE_URL | https://api.open-meteo.com/v1/forecast | 天气 API 地址（无需 Key） |
+| OPEN_METEO_LATITUDE / LONGITUDE | 31.23 / 121.47 | 场地坐标 |
+| WEATHER_FORECAST_WINDOW_MIN | 30 | 预报窗口（分钟） |
+| WEATHER_TEACHING_CONDITION | （空） | 设为 heavy_rain_expected 时强制降雨条件（教学覆写，value_json 标注 teaching_override，保证 S3 可复现） |
+| RAG_KB_DIR | kb | 知识库目录 |
+| TOOL_TIMEOUT_S | 5 | 外部请求超时 |
+
+### S3 复现（未来强降雨不篡改当前路线）
+
+1. 后端以教学覆写启动（保证可复现；去掉该变量则走真实预报）：
+   ```
+   set WEATHER_TEACHING_CONDITION=heavy_rain_expected   （cmd；PowerShell 用 $env:WEATHER_TEACHING_CONDITION='heavy_rain_expected'）
+   py -m uvicorn backend.main:app --port 8000
+   ```
+2. 取三类证据（PowerShell 可用 /docs 代替）：
+   - `POST /api/tools/weather` → `ev_weather_xxx`（future_condition，condition=heavy_rain_expected）
+   - `POST /api/tools/route` → `ev_main_route_xxx`（current_fact/tool，main_route=normal）
+   - `POST /api/tools/rag` body `{"query":"强降雨 注意事项"}` → `ev_knowledge_xxx`（knowledge_basis，matched）
+   - 四个对象的最新 ok 证据 id（`GET /api/evidence/latest/{object_type}`）
+3. 提交 S3 运行（states: crowd=750、entrance 2/2、main_route=normal、support=12；evidence_refs 含上述全部 id）：
+   `POST /api/runs` → 新 run_id
+4. 验证：`GET /api/runs/{run_id}` → evidence_refs 同时含 `future_condition` 与 `knowledge_basis` 键；
+   `derived_results.route = normal`（**当前路线事实未被未来天气覆盖**）；
+   summary = 容量约束正在逼近，其他主要条件保持稳定；`GET /api/current` 的 main_route 仍为 normal。
+
+**自动化测试**：`py -m tests.test_sources`（8 条：天气映射、路线工具 ok/unavailable、
+RAG matched/no_match/unavailable、引用解析、S3 边界链）。
+
 ## 开发约定
 
 - 代码为本项目新写，基于已学能力迁移式实现（多站点并列判定思路 → 多对象状态并行采集）。

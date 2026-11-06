@@ -39,6 +39,8 @@
   .b-complete { color:#3fb950; }
   .b-partial { color:#d29922; }
   #trace-panel { margin-top:10px; font-size:12px; color:#8b949e; font-family:Consolas,monospace; line-height:1.8; }
+  .sit-refs { margin-top:10px; font-size:12px; color:#8b949e; font-family:Consolas,monospace; line-height:1.8; }
+  .role-note { color:#6e7681; }
   #btn-run { background:#1f6feb; color:#fff; border:0; border-radius:8px; padding:8px 16px; cursor:pointer; font-size:13px; margin-top:12px; }
   #run-status { margin-left:10px; font-size:12px; color:#8b949e; }
   .toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
@@ -72,6 +74,7 @@
     <div class="sit-run">run_id: <span id="sit-run-id">—</span> · <span id="sit-time"></span> · 完整性: <span id="sit-completeness">—</span></div>
     <div class="sit-summary" id="sit-summary">尚未生成运行记录</div>
     <div class="sit-main" id="sit-main"></div>
+    <div class="sit-refs" id="sit-refs"></div>
     <div id="sit-unknown" hidden></div>
     <div id="trace-panel"></div>
     <button id="btn-run">执行现实运行（生成新 run_id）</button>
@@ -198,6 +201,17 @@ async function backfillEvidence() {
 
 // ---------- 视图一：整体态势（summary/main_impacts/unknown_items/completeness/run_id） ----------
 const esc2 = esc; // 复用转义
+async function showEvidenceDetail(eid) {
+  try {
+    const res = await fetch('/api/evidence/' + encodeURIComponent(eid));
+    const body = await res.json();
+    const e = body.evidence;
+    document.getElementById('trace-panel').textContent =
+      `证据详情: ${e.evidence_id} · role=${e.evidence_role} · source_type=${e.source_type} · status=${e.status} · observed_at=${e.observed_at || 'null'} · retrieved_at=${(e.retrieved_at || '').slice(11, 19)} · source=${e.source}` + (e.error_message ? ` · ${e.error_message}` : '');
+  } catch (err) {
+    document.getElementById('trace-panel').textContent = '证据详情获取失败';
+  }
+}
 function renderRun(run) {
   if (!run) return;
   document.getElementById('sit-run-id').textContent = run.run_id;
@@ -224,19 +238,24 @@ function renderRun(run) {
     div.addEventListener('click', async (ev) => {
       div.classList.toggle('open');
       const link = ev.target.closest('.evlink');
-      if (!link) return;
-      try {
-        const res = await fetch('/api/evidence/' + encodeURIComponent(link.dataset.eid));
-        const body = await res.json();
-        const e = body.evidence;
-        document.getElementById('trace-panel').textContent =
-          `证据详情: ${e.evidence_id} · status=${e.status} · observed_at=${e.observed_at || 'null'} · retrieved_at=${(e.retrieved_at || '').slice(11, 19)} · source=${e.source}` + (e.error_message ? ` · ${e.error_message}` : '');
-      } catch (err) {
-        document.getElementById('trace-panel').textContent = '证据详情获取失败';
-      }
+      if (link) showEvidenceDetail(link.dataset.eid);
     });
     box.appendChild(div);
   }
+  // 证据引用（阶段05 角色分层展示：对象键=current_fact；role 键=外部证据）
+  const refsBox = document.getElementById('sit-refs');
+  const refEntries = Object.entries(run.evidence_refs || {});
+  refsBox.innerHTML = refEntries.length
+    ? '证据引用: ' + refEntries.map(([k, id]) => {
+        const note = (k === 'future_condition' || k === 'knowledge_basis')
+          ? ` <span class="role-note">[${esc2(k)} 证据，不改变当前事实]</span>` : '';
+        return `<span class="evlink" data-eid="${esc2(id)}">${esc2(k)}:${esc2(id)}</span>${note}`;
+      }).join(' · ')
+    : '证据引用: （无）';
+  refsBox.onclick = (ev) => {
+    const link = ev.target.closest('.evlink');
+    if (link) showEvidenceDetail(link.dataset.eid);
+  };
   const unk = run.unknown_items || [];
   const unkEl = document.getElementById('sit-unknown');
   unkEl.hidden = !unk.length;

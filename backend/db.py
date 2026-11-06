@@ -181,6 +181,36 @@ def insert_failure(object_type: str, status: str, error_message: str | None,
         conn.close()
 
 
+def insert_external_evidence(activity_id: str, object_type: str, evidence_role: str,
+                             source_type: str, source: str, status: str,
+                             value_json: dict | None, error_message: str | None = None,
+                             observed_at: str | None = None) -> dict:
+    """外部来源证据统一入库（阶段05：天气/工具/RAG 结果）。
+
+    evidence_id 沿用 ev_{object_type}_{seq:03d} 序列（weather/knowledge/main_route 各自递增）；
+    status 非 ok 时 value_json 必须为 None（与阶段02 失败语义一致，不伪造业务值）。
+    """
+    retrieved_at = _now_utc()
+    conn = connect()
+    try:
+        evidence_id = _next_evidence_id(conn, object_type)
+        conn.execute(
+            "INSERT INTO evidence (evidence_id, activity_id, object_type, evidence_role, source_type,"
+            " source, observed_at, retrieved_at, status, value_json, error_message, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (evidence_id, activity_id, object_type, evidence_role, source_type, source,
+             observed_at, retrieved_at, status,
+             json.dumps(value_json, ensure_ascii=False) if value_json is not None else None,
+             error_message, retrieved_at))
+        conn.commit()
+        return {"evidence_id": evidence_id, "activity_id": activity_id, "object_type": object_type,
+                "evidence_role": evidence_role, "source_type": source_type, "source": source,
+                "observed_at": observed_at, "retrieved_at": retrieved_at, "status": status,
+                "value_json": value_json, "error_message": error_message, "created_at": retrieved_at}
+    finally:
+        conn.close()
+
+
 def query_history(object_type: str, limit: int = 50) -> list[dict]:
     """observations 按接收时间倒序（历史接口回答"对象过去怎样"）。"""
     conn = connect()
